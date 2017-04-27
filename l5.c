@@ -7,7 +7,7 @@ int main(int argc, char *argv[]) {
 	long addr;
 
 	if (argc != 2) {
-		printf("usage:\n%s sample.com\nor\n%s 8.8.8.8\n", argv[0], argv[0]);
+		printf("Usage:\n%s sample.com\nor\n%s 8.8.8.8\n", argv[0], argv[0]);
 		return 1;
 	}
 

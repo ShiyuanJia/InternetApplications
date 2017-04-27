@@ -7,7 +7,7 @@
 
 #define ECHOMAX 255 /* Longest string to echo */
 
-int main(int argc, char *argv[]) {
+void main(int argc, char *argv[]) {
 	int sock; /* Socket */
 	struct sockaddr_in echoServAddr; /* Local address */
 	struct sockaddr_in echoClntAddr; /* Client address */
@@ -24,7 +24,7 @@ int main(int argc, char *argv[]) {
 	memset(&echoServAddr, 0, sizeof(echoServAddr));
 	echoServAddr.sin_family = AF_INET;
 	echoServAddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	echoServAddr.sin_port =htons(echoServPort);
+	echoServAddr.sin_port = htons(echoServPort);
 	/* Bind to the local address */
 	if ((bind(sock, (struct sockaddr *) &echoServAddr, sizeof(echoServAddr))) < 0)
 		printf("bind() failed.\n");
@@ -33,14 +33,12 @@ int main(int argc, char *argv[]) {
 		/* Set the size of the in-out parameter */
 		cliAddrLen = sizeof(echoClntAddr);
 		/* Block until receive message from a client */
-		if ((recvMsgSize = recvfrom(sock, echoBuffer, ECHOMAX, 0,(struct sockaddr *) &echoClntAddr, &cliAddrLen)) < 0)
+		if ((recvMsgSize = recvfrom(sock, echoBuffer, ECHOMAX, 0, (struct sockaddr *) &echoClntAddr, &cliAddrLen)) < 0)
 			printf("recvfrom() failed.\n");
 		echoBuffer[recvMsgSize] = '\0';
-		printf("from %s:UDP%d : %s\n",inet_ntoa(echoClntAddr.sin_addr), echoClntAddr.sin_port, echoBuffer);
+		printf("from %s:UDP%d : %s\n", inet_ntoa(echoClntAddr.sin_addr), echoClntAddr.sin_port, echoBuffer);
 //		/* Send received datagram back to the client */
 //		if ((sendto(sock, echoBuffer, recvMsgSize, 0, (struct sockaddr *) &echoClntAddr, sizeof(echoClntAddr))) != recvMsgSize)
 //			printf("sendto() sent a different number of bytes than expected.\n");
 	}
-
-	return 0;
 }
