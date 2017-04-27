@@ -10,14 +10,14 @@
 int main(int argc, char *argv[]) {
 	int sock; /* Socket descriptor */
 	struct sockaddr_in echoServAddr; /* Echo server address */
-	struct sockaddr_in fromAddr; /* Source address of echo */
+//	struct sockaddr_in fromAddr; /* Source address of echo */
 	unsigned short echoServPort; /* Echo server port */
-	unsigned int fromSize; /* In-out of address size for recvfrom() */
+//	unsigned int fromSize; /* In-out of address size for recvfrom() */
 	char *servIP; /* IP address of server */
 	char *echoString; /* String to send to echo server */
-	char echoBuffer[ECHOMAX + 1]; /* Buffer for receiving echoed string */
+//	char echoBuffer[ECHOMAX + 1]; /* Buffer for receiving echoed string */
 	size_t echoStringLen; /* Length of string to echo */
-	int respStringLen; /* Length of received response */
+//	int respStringLen; /* Length of received response */
 
 	if (argc < 3) { /* Test for correct number of arguments */
 		printf("Usage: %s <Server IP> <Echo Word>\n", argv[0]);
