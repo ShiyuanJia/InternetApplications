@@ -3,5 +3,5 @@ project(InternetApplications)
 
 set(CMAKE_C_STANDARD 99)
 
-set(SOURCE_FILES l6-EchoServer.c)
+set(SOURCE_FILES l7-Server.c)
 add_executable(InternetApplications ${SOURCE_FILES})
