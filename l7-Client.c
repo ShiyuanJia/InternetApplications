@@ -13,7 +13,7 @@ int main(int argc, char *argv[]) {
 
 	int serverSock;
 	struct sockaddr_in serverAddr;
-	char *fileName, *buffer;
+	char *fileName, buffer[10];
 
 	if ((serverSock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 		printf("socket() failed.\n");
@@ -24,19 +24,19 @@ int main(int argc, char *argv[]) {
 	serverAddr.sin_port = htons(1234);
 
 	connect(serverSock, (struct sockaddr *) &serverAddr, sizeof(serverAddr));
-	printf("Connecting to server: %s\n", argv[1]);
+	printf("Connecting to server:  %s\n", argv[1]);
 
-	send(serverSock, argv[2], sizeof(argv[2]), 0);
+	send(serverSock, argv[2], strlen(argv[2]), 0);
 
 	fileName = argv[2];
-	strcat(fileName, ".bak");
-	int file = open(fileName, O_RDWR | O_CREAT);
-	int transferSize = 0, nCount;
-	while ((nCount = recv(serverSock, buffer, 50, 0)) > 0) {
-		fwrite(buffer, nCount, 1, file);
-		transferSize += nCount;
+	strcat(fileName, ".bak\0");
+	FILE *file = (FILE *) open(fileName, O_RDWR | O_CREAT);
+	int transferSize = 0;
+	while (recv(serverSock, buffer, 1, 0)) {
+		write(file, buffer, 1);
+		transferSize ++;
 	}
-	close(file);
+	close((int) file);
 	printf("File received\n");
 	printf("%d BYTES received, and stored in %s\n", transferSize, fileName);
 
