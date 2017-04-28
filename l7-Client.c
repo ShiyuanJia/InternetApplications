@@ -30,13 +30,13 @@ int main(int argc, char *argv[]) {
 
 	fileName = argv[2];
 	strcat(fileName, ".bak\0");
-	FILE *file = (FILE *) open(fileName, O_RDWR | O_CREAT);
+	int file = open(fileName, O_RDWR | O_CREAT);
 	int transferSize = 0;
 	while (recv(serverSock, buffer, 1, 0)) {
 		write(file, buffer, 1);
 		transferSize ++;
 	}
-	close((int) file);
+	close(file);
 	printf("File received\n");
 	printf("%d BYTES received, and stored in %s\n", transferSize, fileName);
 
