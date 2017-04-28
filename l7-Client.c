@@ -13,7 +13,7 @@ int main(int argc, char *argv[]) {
 
 	int serverSock;
 	struct sockaddr_in serverAddr;
-	char *fileName, buffer[10];
+	char *fileName, buffer[100];
 
 	if ((serverSock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 		printf("socket() failed.\n");
@@ -31,10 +31,10 @@ int main(int argc, char *argv[]) {
 	fileName = argv[2];
 	strcat(fileName, ".bak\0");
 	int file = open(fileName, O_RDWR | O_CREAT);
-	int transferSize = 0;
-	while (recv(serverSock, buffer, 1, 0)) {
-		write(file, buffer, 1);
-		transferSize ++;
+	int transferSize = 0, recvLen;
+	while ((recvLen = recv(serverSock, buffer, 50, 0)) != 0) {
+		write(file, buffer, recvLen);
+		transferSize += recvLen;
 	}
 	close(file);
 	printf("File received\n");

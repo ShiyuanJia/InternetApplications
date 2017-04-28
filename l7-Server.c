@@ -9,7 +9,7 @@ void main(int argc, char *argv[]) {
 	int serverSock, clientSock;
 	struct sockaddr_in serverAddr, clientAddr;
 	socklen_t clientAddrSize = sizeof(clientAddr);
-	char fileName[20], buffer[10];
+	char fileName[20], buffer[100];
 
 	if ((serverSock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 		printf("socket() failed.\n");
@@ -33,10 +33,10 @@ void main(int argc, char *argv[]) {
 			printf("This client request for file name: %s\n", fileName);
 			int file = open(fileName, O_RDONLY);
 			printf("Entering file transfer...\n");
-			int transferSize = 0;
-			while (read(file, buffer, 1) != 0) {
-				send(clientSock, buffer, 1, 0);
-				transferSize ++;
+			int transferSize = 0, sendLen;
+			while ((sendLen = read(file, buffer, 50)) != 0){
+				send(clientSock, buffer, sendLen, 0);
+				transferSize += sendLen;
 			}
 			printf("End of the file\n");
 			printf("%d BYTES data have been sent\n", transferSize);
