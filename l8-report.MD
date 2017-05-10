@@ -1,5 +1,7 @@
 ## DHCP
 
+![DHCP](https://github.com/questionyu/InternetApplications/raw/master/l8-images/DHCP.png)
+
 ### No.1
 
 Bootstrap Protocol (Release)
@@ -240,6 +242,8 @@ Domain Name System (response)
 
 ## DNS-MX
 
+![DNS-MX](https://github.com/questionyu/InternetApplications/raw/master/l8-images/MX-questionyu.com.png)
+
 ### No.1
 
 Domain Name System (query)
@@ -304,6 +308,8 @@ Domain Name System (response)
 
 ## DNS-PTR
 
+![DNS-PTR](https://github.com/questionyu/InternetApplications/raw/master/l8-images/PTR-8.8.8.8.png)
+
 ### No.1
 
 Domain Name System (query)
@@ -366,6 +372,8 @@ Domain Name System (response)
             Domain Name: google-public-dns-a.google.com
 
 ## DNS-AAAA
+
+![DNS-AAAA](https://github.com/questionyu/InternetApplications/raw/master/l8-images/AAAA-questionyu.com.png)
 
 ### No.1
 
@@ -436,6 +444,8 @@ Domain Name System (response)
             AAAA Address: 2400:cb00:2048:1::681f:4c14
 
 ## DNS-TXT
+
+![DNS-TXT](https://github.com/questionyu/InternetApplications/raw/master/l8-images/TXT-google-public-dns-a.google.com.png)
 
 ### No.1
 
