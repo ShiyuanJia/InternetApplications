@@ -168,6 +168,8 @@ Bootstrap Protocol (ACK)
 
 ## DNS-A
 
+![DNS-A](https://github.com/questionyu/InternetApplications/raw/master/l8-images/A-questionyu.com.png)
+
 ### No.1
 
 Domain Name System (query)
