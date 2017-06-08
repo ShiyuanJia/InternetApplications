@@ -82,8 +82,6 @@ typedef struct hash_table lease_id_hash_t;
 typedef struct hash_table host_hash_t;
 typedef struct hash_table class_hash_t;
 
-typedef time_t TIME;
-
 #ifndef EOL
 #define EOL '\n'
 #endif
@@ -2782,8 +2780,6 @@ extern struct in_addr limited_broadcast;
 extern int local_family;
 extern struct in_addr local_address;
 
-extern u_int16_t local_port;
-extern u_int16_t remote_port;
 extern int dhcpv4_over_dhcpv6;
 extern int (*dhcp_interface_setup_hook) (struct interface_info *,
 					 struct iaddr *);

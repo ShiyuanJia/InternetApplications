@@ -1,48 +1,40 @@
-/* dhclient.c
-
-   DHCP Client. */
-
-/*
- * Copyright (c) 2004-2016 by Internet Systems Consortium, Inc. ("ISC")
- * Copyright (c) 1995-2003 by Internet Software Consortium
- *
- * Permission to use, copy, modify, and distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND ISC DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS.  IN NO EVENT SHALL ISC BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
- * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- *   Internet Systems Consortium, Inc.
- *   950 Charter Street
- *   Redwood City, CA 94063
- *   <info@isc.org>
- *   https://www.isc.org/
- *
- * This code is based on the original client state machine that was
- * written by Elliot Poger.  The code has been extensively hacked on
- * by Ted Lemon since then, so any mistakes you find are probably his
- * fault and not Elliot's.
- */
-
 #include "dhcpd.h"
+#include "isc/boolean.h"
+#include "isc/result.h"
 #include <stdio.h>
-#include <syslog.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <sys/syslog.h>
 #include <signal.h>
 #include <errno.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <sys/types.h>
 #include <limits.h>
-#include <isc/file.h>
-#include <dns/result.h>
 
-TIME default_lease_time = 43200; /* 12 hours... */
-TIME max_lease_time = 86400; /* 24 hours... */
+struct iaddr {
+	unsigned len;
+	unsigned char iabuf[16];
+};
+
+struct iaddrlist {
+	struct iaddrlist *next;
+	struct iaddr addr;
+};
+
+struct data_string {
+	struct buffer *buffer;
+	const unsigned char *data;
+	unsigned len;   /* Does not include NUL terminator, if any. */
+	int terminated;
+};
+
+time_t default_lease_time = 43200; /* 12 hours... */
+time_t max_lease_time = 86400; /* 24 hours... */
 
 const char *path_dhclient_conf = _PATH_DHCLIENT_CONF;
 const char *path_dhclient_db = NULL;
@@ -72,20 +64,14 @@ int std_dhcid = 0;
    assert (state_is == state_shouldbe). */
 #define ASSERT_STATE(state_is, state_shouldbe) {}
 
-#ifndef UNIT_TEST
-static const char copyright[] = "Copyright 2004-2016 Internet Systems Consortium.";
-static const char arr[] = "All rights reserved.";
-static const char message[] = "Internet Systems Consortium DHCP Client";
-static const char url[] = "For info, please visit https://www.isc.org/software/dhcp/";
-#endif /* UNIT_TEST */
+static const char vstring[] = "dhcp-client-2014212880";
 
-u_int16_t local_port = 0;
-u_int16_t remote_port = 0;
+u_int16_t local_port;
+u_int16_t remote_port;
 int no_daemon = 0;
 struct string_list *client_env = NULL;
 int client_env_count = 0;
 int onetry = 0;
-int quiet = 1;
 int nowait = 0;
 int stateless = 0;
 int wanted_ia_na = -1;        /* the absolute value is the real one. */
@@ -108,27 +94,9 @@ static int check_domain_name(const char *ptr, size_t len, int dots);
 
 static int check_domain_name_list(const char *ptr, size_t len, int dots);
 
-static int check_option_values(struct universe *universe, unsigned int opt,
-                               const char *ptr, size_t len);
+static int check_option_values(struct universe *universe, unsigned int opt, const char *ptr, size_t len);
 
-static void dhclient_ddns_cb_free(dhcp_ddns_cb_t *ddns_cb,
-                                  char *file, int line);
-
-/*!
- *
- * \brief Print the generic usage message
- *
- * If the user has provided an incorrect command line print out
- * the description of the command line.  The arguments provide
- * a way for the caller to request more specific information about
- * the error be printed as well.  Mostly this will be that some
- * comamnd doesn't include its argument.
- *
- * \param sfmt - The basic string and format for the specific error
- * \param sarg - Generally the offending argument from the comamnd line.
- *
- * \return Nothing
- */
+static void dhclient_ddns_cb_free(dhcp_ddns_cb_t *ddns_cb, char *file, int line);
 
 #ifndef UNIT_TEST
 /* These are only used when we call usage() from the main routine
@@ -136,28 +104,17 @@ static void dhclient_ddns_cb_free(dhcp_ddns_cb_t *ddns_cb,
  */
 static const char use_noarg[] = "No argument for command: %s";
 
-static void usage(const char *sfmt, const char *sarg) {
-	log_info("%s %s", message, PACKAGE_VERSION);
-	log_info(copyright);
-	log_info(arr);
-	log_info(url);
-
-	/* If desired print out the specific error message */
-#ifdef PRINT_SPECIFIC_CL_ERRORS
-																															if (sfmt != NULL)
-		log_error(sfmt, sarg);
-#endif
-
-	log_fatal("Usage: %s "
-			          "[-I1dvrxi] [-nw] [-p <port>] [-D LL|LLT] \n"
-			          "                [-s server-addr] [-cf config-file]\n"
-			          "                [-df duid-file] [-lf lease-file]\n"
-			          "                [-pf pid-file] [--no-pid] [-e VAR=val]\n"
-			          "                [-sf script-file] [interface]*",
-	          isc_file_basename(progname));
+static void usage() {
+	printf("Usage: %s [-]\n", progname);
+	printf("[-p <port>]\n");
+	printf("[-s server-addr]\n");
+	printf("[-r]\n");
+	printf("[--version]\n");
 }
 
 int main(int argc, char **argv) {
+	local_port = htons(68);
+	remote_port = htons(67);
 	int fd;
 	int i;
 	struct interface_info *ip;
@@ -189,123 +146,26 @@ int main(int argc, char **argv) {
 		if (!strcmp(argv[i], "-r")) {
 			release_mode = 1;
 			no_daemon = 1;
-		} else if (!strcmp(argv[i], "-x")) { /* eXit, no release */
-			release_mode = 0;
-			no_daemon = 0;
-			exit_mode = 1;
-		} else if (!strcmp(argv[i], "-p")) {
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			local_port = validate_port(argv[i]);
-			log_debug("binding to user-specified port %d",
-			          ntohs(local_port));
-		} else if (!strcmp(argv[i], "-d")) {
-			no_daemon = 1;
-			quiet = 0;
-		} else if (!strcmp(argv[i], "-pf")) {
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			path_dhclient_pid = argv[i];
-			no_dhclient_pid = 1;
-		} else if (!strcmp(argv[i], "--no-pid")) {
-			no_pid_file = ISC_TRUE;
-		} else if (!strcmp(argv[i], "-cf")) {
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			path_dhclient_conf = argv[i];
-			no_dhclient_conf = 1;
-		} else if (!strcmp(argv[i], "-df")) {
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			path_dhclient_duid = argv[i];
-		} else if (!strcmp(argv[i], "-lf")) {
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			path_dhclient_db = argv[i];
-			no_dhclient_db = 1;
-		} else if (!strcmp(argv[i], "-sf")) {
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			path_dhclient_script = argv[i];
-			no_dhclient_script = 1;
-		} else if (!strcmp(argv[i], "-1")) {
-			onetry = 1;
-		} else if (!strcmp(argv[i], "-q")) {
-			quiet = 1;
-		} else if (!strcmp(argv[i], "-s")) {
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			server = argv[i];
-		} else if (!strcmp(argv[i], "-g")) {
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			mockup_relay = argv[i];
-		} else if (!strcmp(argv[i], "-nw")) {
-			nowait = 1;
-		} else if (!strcmp(argv[i], "-n")) {
-			/* do not start up any interfaces */
-			interfaces_requested = -1;
-		} else if (!strcmp(argv[i], "-w")) {
-			/* do not exit if there are no broadcast interfaces. */
-			persist = 1;
-		} else if (!strcmp(argv[i], "-e")) {
-			struct string_list *tmp;
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			tmp = dmalloc(strlen(argv[i]) + sizeof *tmp, MDL);
-			if (!tmp)
-				log_fatal("No memory for %s", argv[i]);
-			strcpy(tmp->string, argv[i]);
-			tmp->next = client_env;
-			client_env = tmp;
-			client_env_count++;
-		} else if (!strcmp(argv[i], "-D")) {
-			duid_v4 = 1;
-			if (++i == argc)
-				usage(use_noarg, argv[i - 1]);
-			if (!strcasecmp(argv[i], "LL")) {
-				duid_type = DUID_LL;
-			} else if (!strcasecmp(argv[i], "LLT")) {
-				duid_type = DUID_LLT;
-			} else {
-				usage("Unknown argument to -D: %s", argv[i]);
-			}
-		} else if (!strcmp(argv[i], "-i")) {
-			/* enable DUID support for DHCPv4 clients */
-			duid_v4 = 1;
-		} else if (!strcmp(argv[i], "-I")) {
-			/* enable standard DHCID support for DDNS updates */
-			std_dhcid = 1;
-		} else if (!strcmp(argv[i], "-v")) {
-			quiet = 0;
 		} else if (!strcmp(argv[i], "--version")) {
-			const char vstring[] = "isc-dhclient-";
-			IGNORE_RET(write(STDERR_FILENO, vstring,
-			                 strlen(vstring)));
-			IGNORE_RET(write(STDERR_FILENO,
-			                 PACKAGE_VERSION,
-			                 strlen(PACKAGE_VERSION)));
-			IGNORE_RET(write(STDERR_FILENO, "\n", 1));
+			printf("%s\n", vstring);
 			exit(0);
 		} else if (argv[i][0] == '-') {
-			usage("Unknown command: %s", argv[i]);
+			printf("Unknown command: %s\n", argv[i]);
+			usage();
 		} else if (interfaces_requested < 0) {
-			usage("No interfaces comamnd -n and "
-					      " requested interface %s", argv[i]);
+			printf("No interfaces comamnd -n and requested interface %s\n", argv[i]);
+			usage();
 		} else {
 			struct interface_info *tmp = NULL;
 
 			status = interface_allocate(&tmp, MDL);
 			if (status != ISC_R_SUCCESS)
-				log_fatal("Can't record interface %s:%s",
-				          argv[i], isc_result_totext(status));
+				printf("Can't record interface %s:%s\n", argv[i], isc_result_totext(status));
 			if (strlen(argv[i]) >= sizeof(tmp->name))
-				log_fatal("%s: interface name too long (is %ld)",
-				          argv[i], (long) strlen(argv[i]));
+				printf("%s: interface name too long (is %ld)\n", argv[i], (long) strlen(argv[i]));
 			strcpy(tmp->name, argv[i]);
 			if (interfaces) {
-				interface_reference(&tmp->next,
-				                    interfaces, MDL);
+				interface_reference(&tmp->next, interfaces, MDL);
 				interface_dereference(&interfaces, MDL);
 			}
 			interface_reference(&interfaces, tmp, MDL);
@@ -320,7 +180,7 @@ int main(int argc, char **argv) {
 
 	/* Support only one (requested) interface for Prefix Delegation. */
 	if (wanted_ia_pd && (interfaces_requested != 1)) {
-		usage("PD %s only supports one requested interface", "-P");
+		printf("PD %s only supports one requested interface\n", "-P");
 	}
 
 	if (!no_dhclient_conf && (s = getenv("PATH_DHCLIENT_CONF"))) {
@@ -338,12 +198,6 @@ int main(int argc, char **argv) {
 
 	/* Set up the initial dhcp option universe. */
 	initialize_common_option_spaces();
-
-	/* Assign v4 or v6 specific running parameters. */
-	if (local_family == AF_INET)
-		dhcpv4_client_assignments();
-	else
-		log_fatal("Impossible condition at %s:%d.", MDL);
 
 	/*
 	 * convert relative path names to absolute, for files that need
@@ -400,16 +254,8 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	if (!quiet) {
-		log_info("%s %s", message, PACKAGE_VERSION);
-		log_info(copyright);
-		log_info(arr);
-		log_info(url);
-		log_info("%s", "");
-	} else {
-		log_perror = 0;
-		quiet_interface_discovery = 1;
-	}
+	log_perror = 0;
+	quiet_interface_discovery = 1;
 
 	/* If we're given a relay agent address to insert, for testing
 	   purposes, figure out what it is. */
@@ -436,12 +282,9 @@ int main(int argc, char **argv) {
 			struct hostent *he;
 			he = gethostbyname(server);
 			if (he) {
-				memcpy(&sockaddr_broadcast.sin_addr,
-				       he->h_addr_list[0],
-				       sizeof sockaddr_broadcast.sin_addr);
+				memcpy(&sockaddr_broadcast.sin_addr, he->h_addr_list[0], sizeof sockaddr_broadcast.sin_addr);
 			} else
-				sockaddr_broadcast.sin_addr.s_addr =
-						INADDR_BROADCAST;
+				sockaddr_broadcast.sin_addr.s_addr = INADDR_BROADCAST;
 		}
 	} else {
 		sockaddr_broadcast.sin_addr.s_addr = INADDR_BROADCAST;
@@ -454,8 +297,7 @@ int main(int argc, char **argv) {
 		if (release_mode || (wanted_ia_na > 0) ||
 		    wanted_ia_ta || wanted_ia_pd ||
 		    (interfaces_requested != 1)) {
-			usage("Stateless commnad: %s incompatibile with "
-					      "other commands", "-S");
+			printf("Stateless commnad: %s incompatibile with other commands\n", "-S");
 		}
 		run_stateless(exit_mode, 0);
 		return 0;
@@ -879,7 +721,8 @@ void state_selecting(cpp)
 void dhcpack(packet)
 		struct packet *packet;
 {
-	struct interface_info *ip = packet->interface;
+	struct interface_info *ip = packet->
+			interface;
 	struct client_state *client;
 	struct client_lease *lease;
 	struct option_cache *oc;
@@ -892,9 +735,11 @@ void dhcpack(packet)
 			break;
 	}
 	if (!client ||
-	    (packet->interface->hw_address.hlen - 1 !=
+	    (packet->
+			    interface->hw_address.hlen - 1 !=
 	     packet->raw->hlen) ||
-	    (memcmp(&packet->interface->hw_address.hbuf[1],
+	    (memcmp(&packet->
+			            interface->hw_address.hbuf[1],
 	            packet->raw->chaddr, packet->raw->hlen))) {
 #if defined (DEBUG)
 		log_debug ("DHCPACK in wrong transaction.");
@@ -1219,7 +1064,8 @@ void bootp(packet)
 /* If there's a reject list, make sure this packet's sender isn't
    on it. */
 	for (ap = packet->interface->client->config->reject_list;
-	     ap; ap = ap->next) {
+	     ap;
+	     ap = ap->next) {
 		if (addr_match(&packet->client_addr, &ap->match)) {
 
 /* piaddr() returns its result in a static
@@ -1271,7 +1117,8 @@ void dhcp(packet)
 /* If there's a reject list, make sure this packet's sender isn't
    on it. */
 	for (ap = packet->interface->client->config->reject_list;
-	     ap; ap = ap->next) {
+	     ap;
+	     ap = ap->next) {
 		if (addr_match(&packet->client_addr, &ap->match)) {
 
 /* piaddr() returns its result in a static
@@ -1292,7 +1139,8 @@ buffer sized 4*16 (see common/inet.c). */
 void dhcpoffer(packet)
 		struct packet *packet;
 {
-	struct interface_info *ip = packet->interface;
+	struct interface_info *ip = packet->
+			interface;
 	struct client_state *client;
 	struct client_lease *lease, *lp;
 	struct option **req;
@@ -1315,9 +1163,11 @@ void dhcpoffer(packet)
    has an unrecognizable transaction id, then just drop it. */
 	if (!client ||
 	    client->state != S_SELECTING ||
-	    (packet->interface->hw_address.hlen - 1 !=
+	    (packet->
+			    interface->hw_address.hlen - 1 !=
 	     packet->raw->hlen) ||
-	    (memcmp(&packet->interface->hw_address.hbuf[1],
+	    (memcmp(&packet->
+			            interface->hw_address.hbuf[1],
 	            packet->raw->chaddr, packet->raw->hlen))) {
 #if defined (DEBUG)
 		log_debug ("%s in wrong transaction.", name);
@@ -1549,7 +1399,8 @@ struct client_lease *packet_to_lease(packet, client)
 void dhcpnak(packet)
 		struct packet *packet;
 {
-	struct interface_info *ip = packet->interface;
+	struct interface_info *ip = packet->
+			interface;
 	struct client_state *client;
 
 /* Find a client state that matches the xid... */
@@ -1560,9 +1411,11 @@ void dhcpnak(packet)
 /* If we're not receptive to an offer right now, or if the offer
    has an unrecognizable transaction id, then just drop it. */
 	if (!client ||
-	    (packet->interface->hw_address.hlen - 1 !=
+	    (packet->
+			    interface->hw_address.hlen - 1 !=
 	     packet->raw->hlen) ||
-	    (memcmp(&packet->interface->hw_address.hbuf[1],
+	    (memcmp(&packet->
+			            interface->hw_address.hbuf[1],
 	            packet->raw->chaddr, packet->raw->hlen))) {
 #if defined (DEBUG)
 		log_debug ("DHCPNAK in wrong transaction.");
@@ -1659,7 +1512,8 @@ void send_discover(cpp)
 		if (!client->medium) {
 			if (fail)
 				log_fatal("No valid media types for %s!",
-				          client->interface->name);
+				          client->
+						          interface->name);
 			client->medium =
 					client->config->media;
 			increase = 1;
@@ -1708,18 +1562,21 @@ void send_discover(cpp)
 	client->secs = client->packet.secs;
 
 	log_info("DHCPDISCOVER on %s to %s port %d interval %ld",
-	         client->name ? client->name : client->interface->name,
+	         client->name ? client->name : client->
+			         interface->name,
 	         inet_ntoa(sockaddr_broadcast.sin_addr),
 	         ntohs(sockaddr_broadcast.sin_port), (long) (client->interval));
 
 /* Send out a packet. */
-	result = send_packet(client->interface, NULL, &client->packet,
+	result = send_packet(client->
+			                     interface, NULL, &client->packet,
 	                     client->packet_length, inaddr_any,
 	                     &sockaddr_broadcast, NULL);
 	if (result < 0) {
 		log_error("%s:%d: Failed to send %d byte long packet over %s "
 				          "interface.", MDL, client->packet_length,
-		          client->interface->name);
+		          client->
+				          interface->name);
 	}
 
 /*
@@ -1979,7 +1836,8 @@ void send_request(cpp)
 	}
 
 	log_info("DHCPREQUEST on %s to %s port %d",
-	         client->name ? client->name : client->interface->name,
+	         client->name ? client->name : client->
+			         interface->name,
 	         inet_ntoa(destination.sin_addr),
 	         ntohs(destination.sin_port));
 
@@ -1996,14 +1854,16 @@ void send_request(cpp)
 		}
 	} else {
 /* Send out a packet. */
-		result = send_packet(client->interface, NULL, &client->packet,
+		result = send_packet(client->
+				                     interface, NULL, &client->packet,
 		                     client->packet_length, from, &destination,
 		                     NULL);
 		if (result < 0) {
 			log_error("%s:%d: Failed to send %d byte long packet"
 					          " over %s interface.", MDL,
 			          client->packet_length,
-			          client->interface->name);
+			          client->
+					          interface->name);
 		}
 	}
 
@@ -2021,18 +1881,21 @@ void send_decline(cpp)
 	int result;
 
 	log_info("DHCPDECLINE on %s to %s port %d",
-	         client->name ? client->name : client->interface->name,
+	         client->name ? client->name : client->
+			         interface->name,
 	         inet_ntoa(sockaddr_broadcast.sin_addr),
 	         ntohs(sockaddr_broadcast.sin_port));
 
 /* Send out a packet. */
-	result = send_packet(client->interface, NULL, &client->packet,
+	result = send_packet(client->
+			                     interface, NULL, &client->packet,
 	                     client->packet_length, inaddr_any,
 	                     &sockaddr_broadcast, NULL);
 	if (result < 0) {
 		log_error("%s:%d: Failed to send %d byte long packet over %s"
 				          " interface.", MDL, client->packet_length,
-		          client->interface->name);
+		          client->
+				          interface->name);
 	}
 }
 
@@ -2067,7 +1930,8 @@ void send_release(cpp)
 	}
 
 	log_info("DHCPRELEASE on %s to %s port %d",
-	         client->name ? client->name : client->interface->name,
+	         client->name ? client->name : client->
+			         interface->name,
 	         inet_ntoa(destination.sin_addr),
 	         ntohs(destination.sin_port));
 
@@ -2083,14 +1947,16 @@ void send_release(cpp)
 		}
 	} else {
 /* Send out a packet. */
-		result = send_packet(client->interface, NULL, &client->packet,
+		result = send_packet(client->
+				                     interface, NULL, &client->packet,
 		                     client->packet_length, from, &destination,
 		                     NULL);
 		if (result < 0) {
 			log_error("%s:%d: Failed to send %d byte long packet"
 					          " over %s interface.", MDL,
 			          client->packet_length,
-			          client->interface->name);
+			          client->
+					          interface->name);
 		}
 
 	}
@@ -2208,14 +2074,17 @@ make_client_options(struct client_state *client, struct client_lease *lease,
 		 * we use the low 4 bytes from the interface address
 		 */
 		if (client->interface->hw_address.hlen > 4) {
-			hw_idx = client->interface->hw_address.hlen - 4;
+			hw_idx = client->
+					interface->hw_address.hlen - 4;
 			hw_len = 4;
 		} else {
 			hw_idx = 0;
-			hw_len = client->interface->hw_address.hlen;
+			hw_len = client->
+					interface->hw_address.hlen;
 		}
 		memcpy(&client_identifier.buffer->data + 5 - hw_len,
-		       client->interface->hw_address.hbuf + hw_idx,
+		       client->
+				       interface->hw_address.hbuf + hw_idx,
 		       hw_len);
 
 		/* Add the default duid */
@@ -2280,9 +2149,11 @@ void make_discover(client, lease)
 		client->packet_length = BOOTP_MIN_LEN;
 
 	client->packet.op = BOOTREQUEST;
-	client->packet.htype = client->interface->hw_address.hbuf[0];
+	client->packet.htype = client->
+			interface->hw_address.hbuf[0];
 /* Assumes hw_address is known, otherwise a random value may result */
-	client->packet.hlen = client->interface->hw_address.hlen - 1;
+	client->packet.hlen = client->
+			interface->hw_address.hlen - 1;
 	client->packet.hops = 0;
 	client->packet.xid = random();
 	client->packet.secs = 0; /* filled in by send_discover. */
@@ -2301,8 +2172,10 @@ void make_discover(client, lease)
 	client->packet.giaddr = giaddr;
 	if (client->interface->hw_address.hlen > 0)
 		memcpy(client->packet.chaddr,
-		       &client->interface->hw_address.hbuf[1],
-		       (unsigned) (client->interface->hw_address.hlen - 1));
+		       &client->
+				       interface->hw_address.hbuf[1],
+		       (unsigned) (client->
+				       interface->hw_address.hlen - 1));
 
 #ifdef DEBUG_PACKET
 	dump_raw ((unsigned char *)&client -> packet, client -> packet_length);
@@ -2354,9 +2227,11 @@ void make_request(client, lease)
 		client->packet_length = BOOTP_MIN_LEN;
 
 	client->packet.op = BOOTREQUEST;
-	client->packet.htype = client->interface->hw_address.hbuf[0];
+	client->packet.htype = client->
+			interface->hw_address.hbuf[0];
 /* Assumes hw_address is known, otherwise a random value may result */
-	client->packet.hlen = client->interface->hw_address.hlen - 1;
+	client->packet.hlen = client->
+			interface->hw_address.hlen - 1;
 	client->packet.hops = 0;
 	client->packet.xid = client->xid;
 	client->packet.secs = 0; /* Filled in by send_request. */
@@ -2390,8 +2265,10 @@ void make_request(client, lease)
 		       sizeof client->packet.giaddr);
 	if (client->interface->hw_address.hlen > 0)
 		memcpy(client->packet.chaddr,
-		       &client->interface->hw_address.hbuf[1],
-		       (unsigned) (client->interface->hw_address.hlen - 1));
+		       &client->
+				       interface->hw_address.hbuf[1],
+		       (unsigned) (client->
+				       interface->hw_address.hlen - 1));
 
 #ifdef DEBUG_PACKET
 	dump_raw ((unsigned char *)&client -> packet, client -> packet_length);
@@ -2429,9 +2306,11 @@ void make_decline(client, lease)
 		client->packet_length = BOOTP_MIN_LEN;
 
 	client->packet.op = BOOTREQUEST;
-	client->packet.htype = client->interface->hw_address.hbuf[0];
+	client->packet.htype = client->
+			interface->hw_address.hbuf[0];
 /* Assumes hw_address is known, otherwise a random value may result */
-	client->packet.hlen = client->interface->hw_address.hlen - 1;
+	client->packet.hlen = client->
+			interface->hw_address.hlen - 1;
 	client->packet.hops = 0;
 	client->packet.xid = client->xid;
 	client->packet.secs = 0; /* Filled in by send_request. */
@@ -2449,8 +2328,10 @@ void make_decline(client, lease)
 	       sizeof client->packet.siaddr);
 	client->packet.giaddr = giaddr;
 	memcpy(client->packet.chaddr,
-	       &client->interface->hw_address.hbuf[1],
-	       client->interface->hw_address.hlen);
+	       &client->
+			       interface->hw_address.hbuf[1],
+	       client->
+			       interface->hw_address.hlen);
 
 #ifdef DEBUG_PACKET
 	dump_raw ((unsigned char *)&client -> packet, client -> packet_length);
@@ -2491,9 +2372,11 @@ void make_release(client, lease)
 	option_state_dereference(&options, MDL);
 
 	client->packet.op = BOOTREQUEST;
-	client->packet.htype = client->interface->hw_address.hbuf[0];
+	client->packet.htype = client->
+			interface->hw_address.hbuf[0];
 /* Assumes hw_address is known, otherwise a random value may result */
-	client->packet.hlen = client->interface->hw_address.hlen - 1;
+	client->packet.hlen = client->
+			interface->hw_address.hlen - 1;
 	client->packet.hops = 0;
 	client->packet.xid = random();
 	client->packet.secs = 0;
@@ -2506,8 +2389,10 @@ void make_release(client, lease)
 	       sizeof client->packet.siaddr);
 	client->packet.giaddr = giaddr;
 	memcpy(client->packet.chaddr,
-	       &client->interface->hw_address.hbuf[1],
-	       client->interface->hw_address.hlen);
+	       &client->
+			       interface->hw_address.hbuf[1],
+	       client->
+			       interface->hw_address.hlen);
 
 #ifdef DEBUG_PACKET
 	dump_raw ((unsigned char *)&client -> packet, client -> packet_length);
@@ -2782,7 +2667,8 @@ write_client6_lease(struct client_state *client, struct dhc6_lease *lease,
 		return ISC_R_IOERROR;
 
 	stat = fprintf(leaseFile, "  interface \"%s\";\n",
-	               client->interface->name);
+	               client->
+			               interface->name);
 	if (stat <= 0)
 		return ISC_R_IOERROR;
 
@@ -2946,7 +2832,8 @@ int write_client_lease(client, lease, rewrite, makesure)
 		}
 	}
 	fprintf(leaseFile, "  interface \"%s\";\n",
-	        client->interface->name);
+	        client->
+			        interface->name);
 	if (errno) {
 		++errors;
 		errno = 0;
@@ -3034,7 +2921,7 @@ int write_client_lease(client, lease, rewrite, makesure)
 	client->last_write = cur_time;
 
 	if (!errors && makesure) {
-		if (fsync(fileno (leaseFile)) < 0) {
+		if (fsync(fileno(leaseFile)) < 0) {
 			log_info("write_client_lease: %m");
 			return 0;
 		}
@@ -3066,7 +2953,8 @@ void script_init(client, reason, medium)
 
 		if (client->interface) {
 			client_envadd(client, "", "interface", "%s",
-			              client->interface->name);
+			              client->
+					              interface->name);
 		}
 		if (client->name)
 			client_envadd(client,
@@ -3340,8 +3228,7 @@ int script_go(client)
 	        WEXITSTATUS(wstatus) : -WTERMSIG(wstatus));
 }
 
-void client_envadd(struct client_state *client,
-                   const char *prefix, const char *name, const char *fmt, ...) {
+void client_envadd(struct client_state *client, const char *prefix, const char *name, const char *fmt, ...) {
 	char spbuf[1024];
 	char *s;
 	unsigned len;
@@ -3577,7 +3464,8 @@ void do_release(client)
 }
 
 int dhclient_interface_shutdown_hook(struct interface_info *interface) {
-	do_release(interface->client);
+	do_release(
+			interface->client);
 
 	return 1;
 }
@@ -3614,7 +3502,8 @@ int dhclient_interface_discovery_hook(struct interface_info *tmp) {
 			/* Copy "client" to tmp */
 			if (ip->client) {
 				tmp->client = ip->client;
-				tmp->client->interface = tmp;
+				tmp->client->
+						interface = tmp;
 			}
 			interface_dereference(&ip, MDL);
 			break;
@@ -3633,10 +3522,12 @@ isc_result_t dhclient_interface_startup_hook(struct interface_info *interface) {
 	   that may or may not be appropriate. */
 
 	if (interfaces) {
-		interface_reference(&interface->next, interfaces, MDL);
+		interface_reference(&
+				                    interface->next, interfaces, MDL);
 		interface_dereference(&interfaces, MDL);
 	}
-	interface_reference(&interfaces, interface, MDL);
+	interface_reference(&interfaces,
+	                    interface, MDL);
 
 	discover_interfaces(DISCOVER_UNCONFIGURED);
 
@@ -4157,42 +4048,6 @@ dhclient_schedule_updates(struct client_state *client,
 	}
 }
 #endif
-
-void dhcpv4_client_assignments(void) {
-	struct servent *ent;
-
-	if (path_dhclient_pid == NULL)
-		path_dhclient_pid = _PATH_DHCLIENT_PID;
-	if (path_dhclient_db == NULL)
-		path_dhclient_db = _PATH_DHCLIENT_DB;
-
-	/* Default to the DHCP/BOOTP port. */
-	if (!local_port) {
-		/* If we're faking a relay agent, and we're not using loopback,
-		   use the server port, not the client port. */
-		if (mockup_relay && giaddr.s_addr != htonl(INADDR_LOOPBACK)) {
-			local_port = htons(67);
-		} else {
-			ent = getservbyname("dhcpc", "udp");
-			if (ent == NULL)
-				ent = getservbyname("bootpc", "udp");
-			if (ent == NULL)
-				local_port = htons(68);
-			else
-				local_port = ent->s_port;
-#ifndef __CYGWIN32__
-			endservent();
-#endif
-		}
-	}
-
-	/* If we're faking a relay agent, and we're not using loopback,
-	   we're using the server port, not the client port. */
-	if (mockup_relay && giaddr.s_addr != htonl(INADDR_LOOPBACK)) {
-		remote_port = local_port;
-	} else
-		remote_port = htons(ntohs(local_port) - 1);   /* XXX */
-}
 
 /*
  * The following routines are used to check that certain
