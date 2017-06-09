@@ -1,5 +1,5 @@
 #include <stdio.h> /* for printf() and fprintf() */
-//#include <sys/socket.h> /* for socket(), bind(), sendto() and recvfrom() */
+#include <sys/socket.h> /* for socket(), bind(), sendto() and recvfrom() */
 #include <arpa/inet.h> /* for sockaddr_in and inet_ntoa() */
 //#include <stdlib.h> /* for atoi() and exit() */
 #include <string.h> /* for memset() */
@@ -29,6 +29,8 @@ void main(int argc, char *argv[]) {
 	if ((bind(sock, (struct sockaddr *) &echoServAddr, sizeof(echoServAddr))) < 0)
 		printf("bind() failed.\n");
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-noreturn"
 	for (;;) { /* Run forever */
 		/* Set the size of the in-out parameter */
 		cliAddrLen = sizeof(echoClntAddr);
@@ -41,4 +43,5 @@ void main(int argc, char *argv[]) {
 //		if ((sendto(sock, echoBuffer, recvMsgSize, 0, (struct sockaddr *) &echoClntAddr, sizeof(echoClntAddr))) != recvMsgSize)
 //			printf("sendto() sent a different number of bytes than expected.\n");
 	}
+#pragma clang diagnostic pop
 }
