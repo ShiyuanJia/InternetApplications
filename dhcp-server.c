@@ -8,6 +8,8 @@
 #define RECVMAX 1024
 #define DHCP_HEADER_LENTH 240
 
+const char *broadcast_address = "255.255.255.255";
+
 typedef struct {
 	unsigned short type;
 	unsigned short length;
@@ -45,11 +47,12 @@ int option_vendor_class_identifier = 0;
 int main() {
 	struct sockaddr_in dhcp_server_address;
 	unsigned short dhcp_server_port = 68;
+	struct sockaddr_in dhcp_client_address;
+	unsigned short dhcp_client_port = 67;
+	unsigned int dhcp_client_address_length;
 
 	int sock;
 
-	struct sockaddr_in dhcp_client_address;
-	unsigned int dhcp_client_address_length;
 	char recv_buffer[RECVMAX];
 	message recv_struct;
 
@@ -58,7 +61,12 @@ int main() {
 	dhcp_server_address.sin_addr.s_addr = htonl(INADDR_ANY);
 	dhcp_server_address.sin_port = htons(dhcp_server_port);
 
-	if ((sock = socket(PF_INET, SOCK_DGRAM, 0)) < 0)
+	memset(&dhcp_client_address, 0, sizeof(dhcp_client_address));
+	dhcp_client_address.sin_family = AF_INET;
+	dhcp_client_address.sin_addr.s_addr = inet_addr(broadcast_address);
+	dhcp_client_address.sin_port = htons(dhcp_client_port);
+
+	if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
 		printf("socket() failed.\n");
 
 	if ((bind(sock, (struct sockaddr *) &dhcp_server_address, sizeof(dhcp_server_address))) < 0)
@@ -69,21 +77,27 @@ int main() {
 	for (;;) {
 		dhcp_client_address_length = sizeof(dhcp_client_address);
 
+		printf("fuck\n");
+
 		memset(recv_buffer, 0, RECVMAX);
 		int message_length = (int) recvfrom(sock, recv_buffer, RECVMAX, 0, (struct sockaddr *) &dhcp_client_address,
 		                                    &dhcp_client_address_length);
 		if (message_length < 0)
 			printf("recvfrom() failed.\n");
 
+		printf("fuck again\n");
+
 		memcpy(&recv_struct, recv_buffer, DHCP_HEADER_LENTH);
 
 		int size = DHCP_HEADER_LENTH;
 
-		for (int i = 0; i < message_length; i++)
-			printf("%c", recv_buffer[size + 1]);
+		for (int i = 0; i < message_length; i++) {
+			printf("%d\n", i);
+			printf("%c\n", recv_buffer[size + 1]);
+		}
 
 		return 0;
-
+/*
 		while (recv_buffer[size + 1] != ff) {
 			if (size + 1 == 1) {
 				option_subnet_mask = 1;
@@ -143,6 +157,10 @@ int main() {
 
 		printf("from %s:UDP%d : %s\n", inet_ntoa(dhcp_client_address.sin_addr), dhcp_client_address.sin_port,
 		       recv_buffer);
+
+
+		*/
+
 //		/* Send received datagram back to the client */
 //		if ((sendto(sock, recv_buffer, recvMsgSize, 0, (struct sockaddr *) &dhcp_client_address, sizeof(dhcp_client_address))) != recvMsgSize)
 //			printf("sendto() sent a different number of bytes than expected.\n");
@@ -150,9 +168,9 @@ int main() {
 #pragma clang diagnostic pop
 }
 
-message dhcpoffer(message inputformat) {
-	message offerformat;
-	offerformat.transactionID = inputformat.transactionID;
-	offerformat.hardwareAddress = inputformat.hardwareAddress;
-	return offerformat;
-}
+//message dhcpoffer(message inputformat) {
+//	message offerformat;
+//	offerformat.transactionID = inputformat.transactionID;
+//	offerformat.hardwareAddress = inputformat.hardwareAddress;
+//	return offerformat;
+//}
