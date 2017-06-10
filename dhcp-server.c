@@ -1,22 +1,20 @@
-#include <stdio.h> /* for printf() and fprintf() */
-#include <sys/socket.h> /* for socket(), bind(), sendto() and recvfrom() */
-#include <arpa/inet.h> /* for sockaddr_in and inet_ntoa() */
-//#include <stdlib.h> /* for atoi() and exit() */
-#include <string.h> /* for memset() */
-//#include <unistd.h> /* for close() */
+#include <stdio.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <string.h>
 
 #define RECVMAX 1024
 #define DHCP_HEADER_LENTH 240
 
 const char *broadcast_address = "255.255.255.255";
 
-typedef struct {
+struct option {
 	unsigned short type;
 	unsigned short length;
 	char *value;
-} option;
+};
 
-typedef struct {
+struct message {
 	char op;
 	char htype;
 	char hlen;
@@ -31,7 +29,7 @@ typedef struct {
 	char hardwareAddress[16];
 	char sname[64];
 	char bname[128];
-} message;
+};
 
 int option_subnet_mask = 0;
 int option_router_option = 0;
@@ -54,7 +52,7 @@ int main() {
 	int sock;
 
 	char recv_buffer[RECVMAX];
-	message recv_struct;
+	struct message recv_struct;
 
 	memset(&dhcp_server_address, 0, sizeof(dhcp_server_address));
 	dhcp_server_address.sin_family = AF_INET;
@@ -81,7 +79,7 @@ int main() {
 
 		memset(recv_buffer, 0, RECVMAX);
 		int message_length = (int) recvfrom(sock, recv_buffer, RECVMAX, 0, (struct sockaddr *) &dhcp_client_address,
-		                                    &dhcp_client_address_length);
+		                                    (socklen_t *) &dhcp_client_address_length);
 		if (message_length < 0)
 			printf("recvfrom() failed.\n");
 
