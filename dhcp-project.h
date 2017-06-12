@@ -16,8 +16,8 @@
 
 #define SECONDS_ELAPSED                       0
 
-//0 -> Unicast, 1 -> Broadcast
-#define BOOTP_FLAGS                           1
+//0x0000 -> Unicast, 0x0080 -> Broadcast //此处为0x0080 抓包则为0x8000 Broadcast
+#define BOOTP_FLAGS                           0x0080
 
 #define DHCP_MAGIC_COOKIE                     0x63825363
 
@@ -53,8 +53,9 @@
 #define DHCPINFORM                            8
 
 //Vendor class identifier <- OPTION_VENDOR_CLASS_IDENTIFIER //Student Number
-#define DHCP_CLIENT_VENDOR_CLASS_ID           0x2014212880  //余博问
-#define DHCP_SERVER_VENDOR_CLASS_ID           0x2014212873  //李昕龙
+#define DHCP_VENDOR_CLASS_ID_LENGTH           10
+#define DHCP_CLIENT_VENDOR_CLASS_ID           {'2','0','1','4','2','1','2','8','8','0'} //2014212880  //余博问
+#define DHCP_SERVER_VENDOR_CLASS_ID           {'2','0','1','4','2','1','2','8','7','3'} //2014212873  //李昕龙
 
 struct dhcp_t{
 	uint8_t opcode;
