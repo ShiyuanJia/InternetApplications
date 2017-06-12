@@ -6,7 +6,7 @@
 
 #define MAX_WAIT_TIME                         3
 
-//DHCP Packet Arguments
+//-----> DHCP Packet Arguments
 #define BOOTP_MESSAGE_TYPE_REQUEST            1
 #define BOOTP_MESSAGE_TYPE_REPLY              2
 
@@ -16,12 +16,12 @@
 
 #define SECONDS_ELAPSED                       0
 
-//0x0000 -> Unicast, 0x0080 -> Broadcast //此处为0x0080 抓包则为0x8000 Broadcast
+//0x0000 -> Unicast  0x0080 -> Broadcast //此处为0x0080 -> 抓包则为0x8000 -> Broadcast
 #define BOOTP_FLAGS                           0x0080
 
 #define DHCP_MAGIC_COOKIE                     0x63825363
 
-#define DHCP_UDP_OVERHEAD	                  (20 + 8)/* IP header + UDP header */
+#define DHCP_UDP_OVERHEAD	                  (20 + 8) //IP header + UDP header
 #define DHCP_FIXED_NON_UDP	                  240
 #define DHCP_FIXED_LEN		                  (DHCP_FIXED_NON_UDP + DHCP_UDP_OVERHEAD)
 #define DHCP_MTU_MAX		                  1500
@@ -54,8 +54,13 @@
 
 //Vendor class identifier <- OPTION_VENDOR_CLASS_IDENTIFIER //Student Number
 #define DHCP_VENDOR_CLASS_ID_LENGTH           10
-#define DHCP_CLIENT_VENDOR_CLASS_ID           {'2','0','1','4','2','1','2','8','8','0'} //2014212880  //余博问
-#define DHCP_SERVER_VENDOR_CLASS_ID           {'2','0','1','4','2','1','2','8','7','3'} //2014212873  //李昕龙
+#define DHCP_CLIENT_VENDOR_CLASS_ID           {'2','0','1','4','2','1','2','8','8','0'} //2014212880 //余博问
+#define DHCP_SERVER_VENDOR_CLASS_ID           {'2','0','1','4','2','1','2','8','7','3'} //2014212873 //李昕龙
+
+//-----> DHCP Server Arguments
+#define IP_ADDRESS_POOL_START                 0xC0A80002 //192.168.0.2
+#define IP_ADDRESS_POOL_AMOUNT                100
+#define IP_ADDRESS_LEASE_TIME                 3600 //3600 s -> 1 hour
 
 struct dhcp_t{
 	uint8_t opcode;
@@ -74,6 +79,13 @@ struct dhcp_t{
 	char fname[128];
 	uint32_t magic_cookie;
 	uint8_t options[DHCP_MAX_OPTION_LEN]; //把options的内容按每一字节存储 //简单粗暴
+};
+
+struct lease_t{
+	time_t lease_time;
+	uint32_t addr;
+	u_int8_t chaddr[16];
+	struct lease_t *next; //骚骚的使用链表
 };
 
 u_int8_t parameter_req_list[] = {OPTION_SUBNET_MASK, OPTION_ROUTER, OPTION_DOMAIN_NAME_SERVER,
