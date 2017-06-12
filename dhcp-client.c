@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "dhcp-project.h"
 
@@ -176,6 +177,7 @@ void dhcp_discover(struct dhcp_t *dhcp_ack) {
     struct dhcp_t dhcp_discover, dhcp_offer, dhcp_request;
     struct sockaddr_in receiveAddr;
     uint8_t *option_value;
+    srand((unsigned int) time(NULL)); //随机数播种
     xid = (uint32_t) random();
 
     //发送dhcp discover包
@@ -254,7 +256,6 @@ uint16_t fill_dhcp_option(uint8_t *packet, uint8_t code, uint8_t *data, uint16_t
 }
 
 uint16_t construct_dhcp_packet(struct dhcp_t *dhcp) {
-    static time_t l = 0;
     uint16_t len = 0;
     memset(dhcp, 0, sizeof(struct dhcp_t));
 
@@ -346,7 +347,7 @@ uint16_t construct_dhcp_packet(struct dhcp_t *dhcp) {
                             (uint16_t) sizeof(parameter_req_list));
 
     //Option: (60) Vendor class identifier //Student Number
-    uint64_t stuNo = DHCP_CLIENT_VENDOR_CLASS_ID;
+    char stuNo[DHCP_VENDOR_CLASS_ID_LENGTH] = DHCP_CLIENT_VENDOR_CLASS_ID;
     len += fill_dhcp_option(&dhcp->options[len], OPTION_VENDOR_CLASS_IDENTIFIER, (uint8_t *) &stuNo,
                             (uint16_t) sizeof(stuNo));
 
