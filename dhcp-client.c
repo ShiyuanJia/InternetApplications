@@ -2,7 +2,7 @@
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,7 +30,7 @@ struct ifreq if_eth;
 int dhcp_socket;
 
 //两个地址结构体
-struct sockaddr_in dhcp_server_addr, dhcp_client_addr;
+struct sockaddr_in dhcp_server_addr, dhcp_client_addr, receiveAddr;
 
 //网卡名称
 char *dev_name;
@@ -39,10 +39,10 @@ char *dev_name;
 uint32_t xid;
 
 //Your (client) IP address //服务器端offer包提供的IP
-uint32_t yiaddr;
+uint32_t yiaddr; //未转换的 网络字节序的
 
 //DHCP Server Identifier //实际为服务器的IP
-uint32_t dhcp_server_identifier;
+uint32_t dhcp_server_identifier; //未转换的 网络字节序的
 
 //DHCP客户端的几种状态 //Option: (53) DHCP Message Type (Discover/Request/Release/Inform)
 int discover = 0;
@@ -71,9 +71,14 @@ int main(int argc, char **argv) {
 		dhcp_discover(&dhcp_ack);
 		//setup_interface(dhcp_ack); //-----------------------------------------------------------------------------------------------
 	} else if (release) {
-		printf("-----> Release Mode\n");
+		printf("-----> Release Mode\n"); //单播
+		//dhcp_release();
+		//setup_interface_release(); //-----------------------------------------------------------------------------------------------
 	} else if (inform) {
-		printf("-----> Inform Mode\n");
+		printf("-----> Inform Mode\n"); //广播
+		struct dhcp_t dhcp_ack;
+		//dhcp_inform(&dhcp_ack);
+		//setup_interface(dhcp_ack); //-----------------------------------------------------------------------------------------------
 	} else if (renew) {
 		printf("-----> Renew Mode\n"); //单播
 	} else if (rebind) {
@@ -148,17 +153,17 @@ void dhcp_setup() {
 
 	//设置两个地址结构体
 	printf("Initializing two socket addresses...\n");
-	memset(&dhcp_server_addr, 0, sizeof(dhcp_server_addr));
-	memset(&dhcp_client_addr, 0, sizeof(dhcp_client_addr));
+	memset(&dhcp_server_addr, 0, sizeof(struct sockaddr_in));
 	dhcp_server_addr.sin_family = AF_INET;
 	dhcp_server_addr.sin_port = htons(DHCP_SERVER_PORT);
-//	if (rebind || release)
-//		dhcp_server_addr.sin_addr.s_addr =; //之前记录的DHCP服务器地址
-//	else
-	dhcp_server_addr.sin_addr.s_addr = INADDR_BROADCAST;
+	if (rebind || release)
+		dhcp_server_addr.sin_addr.s_addr = htonl(DHCP_SERVER_IP_ADDRESS);
+	else
+		dhcp_server_addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+	memset(&dhcp_client_addr, 0, sizeof(struct sockaddr_in));
 	dhcp_client_addr.sin_family = AF_INET;
 	dhcp_client_addr.sin_port = htons(DHCP_CLIENT_PORT);
-	dhcp_client_addr.sin_addr.s_addr = INADDR_ANY;
+	dhcp_client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
 	//把dhcp_client_addr绑定到dhcp_socket上
 	printf("Binding the socket address to socket...\n");
@@ -175,10 +180,10 @@ void dhcp_close() {
 
 void dhcp_discover(struct dhcp_t *dhcp_ack) {
 	struct dhcp_t dhcp_discover, dhcp_offer, dhcp_request;
-	struct sockaddr_in receiveAddr;
 	uint8_t *option_value;
 	srand((unsigned int) time(NULL)); //随机数播种
 	xid = (uint32_t) rand();
+	socklen_t receiveAddrLen = sizeof(struct sockaddr_in);
 
 	//发送dhcp discover包
 	size_t dhcp_discover_size = construct_dhcp_packet(&dhcp_discover);
@@ -190,18 +195,20 @@ void dhcp_discover(struct dhcp_t *dhcp_ack) {
 	}
 
 	//接收dhcp offer包
-	printf("Receiving the dhcp offer packet...\n");
 	while (1) {
+		printf("Receiving the dhcp offer packet...\n");
 		if (recvfrom(dhcp_socket, &dhcp_offer, sizeof(struct dhcp_t), 0, (struct sockaddr *) &receiveAddr,
-		             (socklen_t *) sizeof(struct sockaddr_in)) < 0) {
+		             &receiveAddrLen) < 0) {
 			printf("Cannot receive dhcp offer packet!\n");
 			exit(1);
 		} else {
 			printf("Received an udp packet! Checking...\n");
-			if (dhcp_offer.opcode == BOOTP_MESSAGE_TYPE_REPLY && dhcp_offer.xid == xid) {
+			dhcp_dump(&dhcp_offer);
+			if (dhcp_offer.opcode == BOOTP_MESSAGE_TYPE_REPLY && dhcp_offer.xid == htonl(xid)) {
 				get_dhcp_option(&dhcp_offer, OPTION_DHCP_SERVER_IDENTIFIER, &option_value);
 				memcpy(&dhcp_server_identifier, option_value, sizeof(struct in_addr));
-				int addr = ntohl(receiveAddr.sin_addr.s_addr);
+				yiaddr = dhcp_offer.yiaddr;
+				int addr = ntohl(dhcp_server_identifier);
 				printf("Received a dhcp offer packet from %d.%d.%d.%d!\n", (addr >> 24) & 0xFF, (addr >> 16) & 0xFF,
 				       (addr >> 8) & 0xFF, (addr) & 0xFF);
 				break;
@@ -220,17 +227,17 @@ void dhcp_discover(struct dhcp_t *dhcp_ack) {
 	}
 
 	//接收dhcp ack包
-	printf("Receiving the dhcp ack packet...\n");
 	while (1) {
+		printf("Receiving the dhcp ack packet...\n");
 		if (recvfrom(dhcp_socket, dhcp_ack, sizeof(struct dhcp_t), 0, (struct sockaddr *) &receiveAddr,
-		             (socklen_t *) sizeof(struct sockaddr_in)) < 0) {
+		             &receiveAddrLen) < 0) {
 			printf("Cannot receive dhcp ack packet!\n");
 			exit(1);
 		} else {
 			printf("Received an udp packet! Checking...\n");
-			if (dhcp_ack->opcode == BOOTP_MESSAGE_TYPE_REPLY && dhcp_ack->xid == xid) {
+			if (dhcp_ack->opcode == BOOTP_MESSAGE_TYPE_REPLY && dhcp_ack->xid == htonl(xid)) {
 				memcpy(&dhcp_server_identifier, option_value, sizeof(struct in_addr));
-				int addr = ntohl(receiveAddr.sin_addr.s_addr);
+				int addr = ntohl(dhcp_server_identifier);
 				printf("Received a dhcp ack packet from %d.%d.%d.%d!\n", (addr >> 24) & 0xFF, (addr >> 16) & 0xFF,
 				       (addr >> 8) & 0xFF, (addr) & 0xFF);
 				break;
@@ -239,7 +246,7 @@ void dhcp_discover(struct dhcp_t *dhcp_ack) {
 	}
 }
 
-int get_mac_address(char *dev_name, char *mac) {
+int get_mac_address(char *dev_name, uint8_t *mac) {
 	struct ifreq s;
 	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
 	int result;
@@ -250,7 +257,7 @@ int get_mac_address(char *dev_name, char *mac) {
 	if (result != 0)
 		return -1;
 
-	memcpy(mac, s.ifr_addr.sa_data, IFHWADDRLEN);
+	memcpy((void *) mac, s.ifr_addr.sa_data, IFHWADDRLEN);
 	return 0;
 }
 
@@ -298,7 +305,7 @@ uint16_t construct_dhcp_packet(struct dhcp_t *dhcp) {
 	dhcp->giaddr = htonl(INADDR_ANY);
 
 	//Client MAC address
-	if (get_mac_address(dev_name, (char *) dhcp->chaddr) < 0) {
+	if (get_mac_address(dev_name, dhcp->chaddr) < 0) {
 		printf("Cannot obtain the MAC address: %s\n", dev_name);
 		exit(1);
 	}
@@ -328,7 +335,7 @@ uint16_t construct_dhcp_packet(struct dhcp_t *dhcp) {
 
 	if (request) {
 		//Option: (54) DHCP Server Identifier
-		len += fill_dhcp_option(&dhcp->options[len], OPTION_DHCP_MESSAGE_TYPE, (uint8_t *) &dhcp_server_identifier,
+		len += fill_dhcp_option(&dhcp->options[len], OPTION_DHCP_SERVER_IDENTIFIER, (uint8_t *) &dhcp_server_identifier,
 		                        (uint16_t) sizeof(dhcp_server_identifier));
 	}
 

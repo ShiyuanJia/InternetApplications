@@ -1,7 +1,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include <net/if.h>
+#include <linux/if.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,13 +32,16 @@ uint32_t allocate_ip(uint8_t *mac);
 int dhcp_socket;
 
 //两个地址结构体
-struct sockaddr_in dhcp_server_addr, dhcp_client_addr;
+struct sockaddr_in dhcp_server_addr, dhcp_client_addr, receiveAddr;
 
 //收到的dhcp包
 struct dhcp_t dhcp_recv;
 
-//Transaction ID
-uint32_t xid;
+//网络接口信息结构体，表示一个网卡
+struct ifreq if_eth;
+
+//网卡名称
+char *dev_name;
 
 //记录分配租约的个数
 int num_of_lease = 0;
@@ -52,6 +55,14 @@ void main(int argc, char **argv) {
 		exit(0);
 	}
 
+	if (argc != 2) {
+		printf("Usage: %s <interface>\n", argv[0]);
+		exit(0);
+	}
+
+	//第二个参数即为指定的网卡名称
+	dev_name = argv[1];
+
 	//初始化socket和地址结构体
 	dhcp_setup();
 
@@ -61,8 +72,8 @@ void main(int argc, char **argv) {
 	while (1) {
 		//接收dhcp包 Discover/Request/Decline/Release/Inform
 		printf("Waiting for the dhcp packet...\n");
-		if (recvfrom(dhcp_socket, &dhcp_recv, sizeof(struct dhcp_t), 0, (struct sockaddr *) &dhcp_client_addr,
-		             (socklen_t *) sizeof(struct sockaddr_in)) < 0) {
+		socklen_t receiveAddrLen = sizeof(struct sockaddr_in);
+		if (recvfrom(dhcp_socket, &dhcp_recv, sizeof(struct dhcp_t), 0, (struct sockaddr *) &receiveAddr, &receiveAddrLen) < 0) {
 			printf("Cannot receive dhcp packet!\n");
 			continue;
 		} else {
@@ -115,14 +126,14 @@ void dhcp_setup() {
 	if ((dhcp_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
 		printf("socket() failed.\n");
 
-/*
-    //给socket设置超时时间
-	printf("Seting the max wait time of socket...\n");
-	struct timeval timeout;
-    timeout.tv_sec = MAX_WAIT_TIME;
-    timeout.tv_usec = 0;
-    setsockopt(dhcp_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-*/
+	//绑定socket到网卡上
+	printf("Binding the socket to interface: %s...\n", dev_name);
+	strcpy(if_eth.ifr_name, dev_name);
+	if_eth.ifr_addr.sa_family = AF_INET;
+	if (setsockopt(dhcp_socket, SOL_SOCKET, SO_BINDTODEVICE, (char *) &if_eth, sizeof(if_eth)) < 0) {
+		printf("Bind the socket to %s failed!\n", dev_name);
+		exit(1);
+	}
 
 	//设置socket广播
 	printf("Setting the socket broadcast...\n");
@@ -133,11 +144,15 @@ void dhcp_setup() {
 	}
 
 	//设置地址结构体
-	printf("Initializing the socket address...\n");
-	memset(&dhcp_server_addr, 0, sizeof(dhcp_server_addr));
+	printf("Initializing two socket addresses...\n");
+	memset(&dhcp_server_addr, 0, sizeof(struct sockaddr_in));
 	dhcp_server_addr.sin_family = AF_INET;
 	dhcp_server_addr.sin_port = htons(DHCP_SERVER_PORT);
-	dhcp_server_addr.sin_addr.s_addr = htonl(INADDR_ANY);;
+	dhcp_server_addr.sin_addr.s_addr = htonl(INADDR_ANY); //这个地方目前只能写0.0.0.0 //设为服务器地址时，服务器不处理广播的包
+	memset(&dhcp_client_addr, 0, sizeof(struct sockaddr_in));
+	dhcp_client_addr.sin_family = AF_INET;
+	dhcp_client_addr.sin_port = htons(DHCP_CLIENT_PORT);
+	dhcp_client_addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
 
 	//把dhcp_client_addr绑定到dhcp_socket上
 	printf("Binding the socket address to socket...\n");
@@ -202,7 +217,7 @@ uint16_t construct_dhcp_packet(struct dhcp_t *dhcp, uint8_t state) {
 	len += fill_dhcp_option(&dhcp->options[len], OPTION_DHCP_MESSAGE_TYPE, &state, (uint16_t) sizeof(state));
 
 	//Option: (54) DHCP Server Identifier
-	uint32_t dhcp_server_identifier = DHCP_SERVER_IP_ADDRESS;
+	uint32_t dhcp_server_identifier = htonl(DHCP_SERVER_IP_ADDRESS);
 	len += fill_dhcp_option(&dhcp->options[len], OPTION_DHCP_SERVER_IDENTIFIER, (uint8_t *) &dhcp_server_identifier,
 	                        (uint16_t) sizeof(dhcp_server_identifier));
 
@@ -213,32 +228,32 @@ uint16_t construct_dhcp_packet(struct dhcp_t *dhcp, uint8_t state) {
 
 	if (state != DHCPNAK) {
 		//Option: (1) Subnet Mask
-		uint32_t subnet_mask = SUBNET_MASK;
+		uint32_t subnet_mask = htonl(SUBNET_MASK);
 		len += fill_dhcp_option(&dhcp->options[len], OPTION_SUBNET_MASK, (uint8_t *) &subnet_mask,
 		                        (uint16_t) sizeof(subnet_mask));
 
 		//Option: (3) Router
-		uint32_t router_adress = ROUTER_IP_ADDRESS;
+		uint32_t router_adress = htonl(ROUTER_IP_ADDRESS);
 		len += fill_dhcp_option(&dhcp->options[len], OPTION_ROUTER, (uint8_t *) &router_adress,
 		                        (uint16_t) sizeof(router_adress));
 
 		//Option: (6) Domain Name Server
-		uint32_t dns_address = DOMAIN_NAME_SERVER_ADDRESS;
+		uint32_t dns_address = htonl(DOMAIN_NAME_SERVER_ADDRESS);
 		len += fill_dhcp_option(&dhcp->options[len], OPTION_DOMAIN_NAME_SERVER, (uint8_t *) &dns_address,
 		                        (uint16_t) sizeof(dns_address));
 
 		//Option: (51) IP Address Lease Time
-		uint32_t lease_time = IP_ADDRESS_LEASE_TIME;
+		uint32_t lease_time = htonl(IP_ADDRESS_LEASE_TIME);
 		len += fill_dhcp_option(&dhcp->options[len], OPTION_IP_ADDRESS_LEASE_TIME, (uint8_t *) &lease_time,
 		                        sizeof(lease_time));
 
 		//Option: (58) Renewal Time Value
-		uint32_t t1_renew_time = (uint32_t) (T1_RENEWAL_TIME);
+		uint32_t t1_renew_time = htonl((uint32_t) (T1_RENEWAL_TIME));
 		len += fill_dhcp_option(&dhcp->options[len], OPTION_IP_T1_RENEWAL_TIME, (uint8_t *) &t1_renew_time,
 		                        sizeof(t1_renew_time));
 
 		//Option: (59) Rebinding Time Value
-		uint32_t t2_rebind_time = (uint32_t) (T2_REBIND_TIME);
+		uint32_t t2_rebind_time = htonl((uint32_t) (T2_REBIND_TIME));
 		len += fill_dhcp_option(&dhcp->options[len], OPTION_IP_T2_REBIND_TIME, (uint8_t *) &t2_rebind_time,
 		                        sizeof(t2_rebind_time));
 	}
@@ -258,9 +273,10 @@ void dhcp_handle_discover() {
 	//发offer包
 	size_t dhcp_offer_size = construct_dhcp_packet(dhcp_offer, DHCPOFFER);
 	printf("Sending the dhcp offer packet...\n");
-	if (sendto(dhcp_socket, dhcp_offer, dhcp_offer_size, 0, (struct sockaddr *) &dhcp_client_addr,
-	           sizeof(struct sockaddr_in)) < 0)
+	dhcp_dump(dhcp_offer);
+	if (sendto(dhcp_socket, dhcp_offer, dhcp_offer_size, 0, (struct sockaddr *) &dhcp_client_addr, sizeof(struct sockaddr_in)) < 0)
 		printf("Send dhcp offer packet failed!\n");
+	printf("-----> %zu\n", dhcp_offer_size);
 }
 
 //处理客户端的request
@@ -336,14 +352,18 @@ int check_ipaddr(uint32_t *ip, uint8_t *mac) {
 //从地址池中分配地址
 uint32_t allocate_ip(uint8_t *mac) {
 	int num;
+	printf("---------->     Number of lease: %d\n", num_of_lease);
 
 	//检查有没有相同的MAC
 	struct lease_t *lease = lease_head; //保留头指针不动
 	while (lease->next) {
+		printf("%x %x %x %x ---------------------- %x\n", lease->next->chaddr[0], lease->next->chaddr[1], lease->next->chaddr[2], lease->next->chaddr[3],
+		       (unsigned int) mac);
 		if (memcmp(lease->next->chaddr, mac, HARDWARE_ADDRESS_LENGTH) == 0) { //MAC相同
 			lease->next->time_stamp = time(NULL); //更新时间戳
 			return lease->next->addr; //直接返回相同MAC地址对应的IP地址就可以了
 		}
+		printf("+++++++++++++++++++++++++++++\n");
 		lease = lease->next;
 	}
 
@@ -367,8 +387,9 @@ uint32_t allocate_ip(uint8_t *mac) {
 	}
 
 	struct lease_t *new_lease = (struct lease_t *)malloc(sizeof(struct lease_t));
-	new_lease->addr = new_ip;
 	new_lease->time_stamp = time(NULL); //时间戳
+	new_lease->addr = new_ip;
+	memcpy(new_lease->chaddr, mac, HARDWARE_ADDRESS_LENGTH);
 	new_lease->next = NULL;
 
 	lease->next = new_lease;

@@ -96,13 +96,13 @@ struct dhcp_t {
 struct lease_t {
 	time_t time_stamp; //记录设置租约的时候的时间
 	uint32_t addr;
-	u_int8_t chaddr[16];
+	uint8_t chaddr[16];
 	struct lease_t *next; //骚骚的使用链表
 };
 
-u_int8_t parameter_req_list[] = {OPTION_SUBNET_MASK, OPTION_ROUTER, OPTION_DOMAIN_NAME_SERVER,
+uint8_t parameter_req_list[] = {OPTION_SUBNET_MASK, OPTION_ROUTER, OPTION_DOMAIN_NAME_SERVER,
                                  OPTION_IP_ADDRESS_LEASE_TIME, OPTION_IP_T1_RENEWAL_TIME, OPTION_IP_T2_REBIND_TIME,
-                                 OPTION_DOMAIN_NAME, OPTION_VENDOR_CLASS_IDENTIFIER};
+                                 OPTION_VENDOR_CLASS_IDENTIFIER};
 
 uint8_t get_dhcp_option(struct dhcp_t *dhcp, uint8_t option_type, uint8_t **option_value) {
 	uint8_t *i;
@@ -129,4 +129,44 @@ uint16_t fill_dhcp_option(uint8_t *packet, uint8_t code, uint8_t *data, uint16_t
 	memcpy(&packet[2], data, len);
 
 	return len + (uint16_t) (sizeof(uint8_t) * ((uint16_t) 2));
+}
+
+void dhcp_dump(struct dhcp_t *dhcp_reply) {
+	//Message type
+	printf("op: %d\n", dhcp_reply->opcode);
+
+	//Hardware type
+	printf("htype: %d\n", dhcp_reply->htype);
+
+	//Hardware address length
+	printf("hlen: %d\n", dhcp_reply->hlen);
+
+	//Hops
+	printf("hops: %d\n", dhcp_reply->hops);
+
+	//Transaction ID
+	printf("xid: %x\n", ntohl(dhcp_reply->xid));
+
+	//Seconds elapsed
+	printf("secs: %d\n", dhcp_reply->secs);
+
+	//Bootp flags
+	printf("flags: %x\n", dhcp_reply->flags);
+
+	//Client IP address
+	struct in_addr t;
+	t.s_addr = dhcp_reply->ciaddr;
+	printf("ciaddr: %s\n", inet_ntoa(t));
+
+	//Your (client) IP address
+	t.s_addr = dhcp_reply->yiaddr;
+	printf("yiaddr: %s\n", inet_ntoa(t));
+
+	//Next server IP address
+	t.s_addr = dhcp_reply->siaddr;
+	printf("ciaddr: %s\n", inet_ntoa(t));
+
+	//Relay agent IP address
+	t.s_addr = dhcp_reply->giaddr;
+	printf("ciaddr: %s\n", inet_ntoa(t));
 }
