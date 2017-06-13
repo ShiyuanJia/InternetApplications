@@ -1,8 +1,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
-#include <linux/if.h>
+#include <net/if.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,7 +44,7 @@ uint32_t xid;
 int num_of_lease = 0;
 
 //定义租约结构体的头指针，准备使用链表
-struct lease_t *lease_head = NULL;
+struct lease_t *lease_head;
 
 void main(int argc, char **argv) {
 	if (geteuid() != 0) {
@@ -107,6 +106,10 @@ void main(int argc, char **argv) {
 
 //设置socket
 void dhcp_setup() {
+	//初始化头指针
+	lease_head = (struct lease_t *)malloc(sizeof(struct lease_t));
+	lease_head->next = NULL;
+
 	//创建socket
 	printf("Creating a socket...\n");
 	if ((dhcp_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
@@ -313,11 +316,11 @@ int check_ipaddr(uint32_t *ip, uint8_t *mac) {
 
 	//检查有没有重复的地址
 	struct lease_t *lease = lease_head; //保留头指针不动
-	while (lease) {
-		if (lease->addr == *ip) { //IP相同
+	while (lease->next) {
+		if (lease->next->addr == *ip) { //IP相同
 			time_t now = time(NULL);
-			if (lease->time_stamp + IP_ADDRESS_LEASE_TIME > now) { //租约没有到期
-				if (memcmp(lease->chaddr, mac, HARDWARE_ADDRESS_LENGTH) != 0) { //记录的MAC地址不相同 //相同的时候memcmp返回0
+			if (lease->next->time_stamp + IP_ADDRESS_LEASE_TIME > now) { //租约没有到期
+				if (memcmp(lease->next->chaddr, mac, HARDWARE_ADDRESS_LENGTH) != 0) { //记录的MAC地址不相同 //相同的时候memcmp返回0
 					return -1;
 				} else //记录的MAC地址相同，即正确的客户端来申请原来的地址
 					return 1;
@@ -336,10 +339,10 @@ uint32_t allocate_ip(uint8_t *mac) {
 
 	//检查有没有相同的MAC
 	struct lease_t *lease = lease_head; //保留头指针不动
-	while (lease) {
-		if (memcmp(lease->chaddr, mac, HARDWARE_ADDRESS_LENGTH) == 0) { //MAC相同
-			lease->time_stamp = time(NULL); //更新时间戳
-			return lease->addr; //直接返回相同MAC地址对应的IP地址就可以了
+	while (lease->next) {
+		if (memcmp(lease->next->chaddr, mac, HARDWARE_ADDRESS_LENGTH) == 0) { //MAC相同
+			lease->next->time_stamp = time(NULL); //更新时间戳
+			return lease->next->addr; //直接返回相同MAC地址对应的IP地址就可以了
 		}
 		lease = lease->next;
 	}
@@ -357,22 +360,19 @@ uint32_t allocate_ip(uint8_t *mac) {
 	num = rand() % IP_ADDRESS_POOL_AMOUNT;
 	new_ip = IP_ADDRESS_POOL_START + num; //随机生成一个IP地址
 	lease = lease_head; //保留头指针不动
-	while (lease) {
-		if (lease->addr == new_ip)
+	while (lease->next) {
+		if (lease->next->addr == new_ip)
 			goto outer;
 		lease = lease->next;
 	}
 
-	struct lease_t new_lease;
-	new_lease.addr = new_ip;
-	new_lease.next = NULL;
+	struct lease_t *new_lease = (struct lease_t *)malloc(sizeof(struct lease_t));
+	new_lease->addr = new_ip;
+	new_lease->time_stamp = time(NULL); //时间戳
+	new_lease->next = NULL;
 
-	if (!lease_head) //如果头指针是NULL
-		lease_head = &new_lease;
-	else
-		lease->next = &new_lease;
-
+	lease->next = new_lease;
 	num_of_lease++;
 
-	return new_lease.addr;
+	return new_lease->addr;
 }
