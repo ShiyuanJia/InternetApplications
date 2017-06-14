@@ -61,11 +61,11 @@
 //-----> DHCP Server Arguments
 #define IP_ADDRESS_POOL_START                 0xC0A80002 //192.168.0.2
 #define IP_ADDRESS_POOL_AMOUNT                100
-#define IP_ADDRESS_LEASE_TIME                 3600 //3600 s -> 1 hour //最好是8的倍数 //单位有待确定
-
-#define RELAY_AGENT_IP_ADDRESS                DHCP_SERVER_IP_ADDRESS
+#define IP_ADDRESS_LEASE_TIME                 8 //单位为秒 //最好是8的倍数
 
 #define DHCP_SERVER_IP_ADDRESS                0xC0A80001 //192.168.0.1
+
+#define RELAY_AGENT_IP_ADDRESS                DHCP_SERVER_IP_ADDRESS
 
 #define SUBNET_MASK                           0xFFFFFF00 //255.255.255.0
 #define ROUTER_IP_ADDRESS                     DHCP_SERVER_IP_ADDRESS
