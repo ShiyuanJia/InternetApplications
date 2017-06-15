@@ -63,7 +63,7 @@
 //-----> DHCP Server Arguments
 #define IP_ADDRESS_POOL_START                 0xC0A80002 //192.168.0.2
 #define IP_ADDRESS_POOL_AMOUNT                100
-#define IP_ADDRESS_LEASE_TIME                 8 //单位为秒 //最好是8的倍数
+#define IP_ADDRESS_LEASE_TIME                 64 //单位为秒 //最好是8的倍数
 
 #define DHCP_SERVER_IP_ADDRESS                0xC0A80001 //192.168.0.1
 
