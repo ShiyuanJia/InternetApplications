@@ -6,6 +6,8 @@
 #define DHCP_SERVER_PORT                      67
 #define DHCP_CLIENT_PORT                      68
 
+#define MAX_WAIT_TIME                         5
+
 //-----> DHCP Packet Arguments
 #define BOOTP_MESSAGE_TYPE_REQUEST            1
 #define BOOTP_MESSAGE_TYPE_REPLY              2

@@ -28,11 +28,11 @@ void dhcp_handle_inform();
 
 int check_ipaddr(uint32_t *ip, uint8_t *mac);
 
-uint32_t allocate_ip(uint8_t *mac);
+int allocate_ip(uint32_t *new_ip, uint8_t *mac);
 
 void add_lease(uint32_t *new_ip, uint8_t *mac);
 
-void delete_lease(uint8_t *mac);
+void delete_lease(uint32_t *ip, uint8_t *mac);
 
 //DHCP的socket
 int dhcp_socket;
@@ -192,6 +192,8 @@ void dhcp_close() {
 uint16_t construct_dhcp_packet(struct dhcp_t *dhcp, uint8_t state) {
 	uint16_t len = 0;
 
+	printf("Constructing a dhcp packet...\n");
+
 	//Message Type //Boot Reply
 	dhcp->opcode = BOOTP_MESSAGE_TYPE_REPLY;
 
@@ -213,8 +215,8 @@ uint16_t construct_dhcp_packet(struct dhcp_t *dhcp, uint8_t state) {
 	if (state == DHCPNAK) {
 		dhcp->yiaddr = htonl(INADDR_ANY); //NAK的时候返回0.0.0.0
 	} else if (state == DHCPOFFER) {
-		uint32_t offer_ip = allocate_ip(dhcp->chaddr); //从地址池中找一个可用的地址
-		if (offer_ip == 0) {
+		uint32_t offer_ip;
+		if (allocate_ip(&offer_ip, dhcp->chaddr) < 0) { //从地址池中找一个可用的地址
 			printf("IP address pool is not available!\n");
 			return 0;
 		}
@@ -223,9 +225,10 @@ uint16_t construct_dhcp_packet(struct dhcp_t *dhcp, uint8_t state) {
 		uint8_t *option_value;
 		get_dhcp_option(&dhcp_recv, OPTION_REQUESTED_IP, &option_value); //使用客户端请求的地址作为yiaddr
 		add_lease((uint32_t *) option_value, dhcp->chaddr);
-		dhcp->yiaddr = *option_value;
+		memcpy(&dhcp->yiaddr, option_value, sizeof(uint32_t));
 	} else {
-		uint32_t offer_ip = allocate_ip(dhcp->chaddr); //从租约中找到相同MAC的记录的地址
+		uint32_t offer_ip;
+		allocate_ip(&offer_ip, dhcp->chaddr); //从租约中找到相同MAC的记录的地址
 		dhcp->yiaddr = htonl(offer_ip);
 	}
 
@@ -351,7 +354,8 @@ void dhcp_handle_request() {
 //处理客户端的release
 void dhcp_handle_release() {
 	//不需要回复，只需要把租约链表中对应的节点删除就可以了
-	delete_lease(dhcp_recv.chaddr);
+	printf("Deleting lease...\n");
+	delete_lease(&dhcp_recv.ciaddr, dhcp_recv.chaddr);
 }
 
 //处理客户端的inform
@@ -370,14 +374,6 @@ void dhcp_handle_inform() {
 
 //检查IP地址 //包括检查地址池 //大于0 -> 正常 //小于0 -> 错误
 int check_ipaddr(uint32_t *ip, uint8_t *mac) {
-	struct in_addr addr;
-	addr.s_addr = *ip;
-
-	//检查地址的格式是否正确 //其实只要判断是否在地址池范围内就足够了 //但既然已经写出来了，就留着吧，反正也没啥影响
-	if (inet_pton(AF_INET, inet_ntoa(addr), &addr) != 1) {
-		return -1;
-	}
-
 	//检查是否在地址池中
 	uint32_t req_ip = ntohl(*ip);
 	if (req_ip < IP_ADDRESS_POOL_START || req_ip > IP_ADDRESS_POOL_START + IP_ADDRESS_POOL_AMOUNT - 1) {
@@ -404,46 +400,48 @@ int check_ipaddr(uint32_t *ip, uint8_t *mac) {
 }
 
 //从地址池中找到一个可用地址
-uint32_t allocate_ip(uint8_t *mac) {
+int allocate_ip(uint32_t *new_ip, uint8_t *mac) {
 	int num;
 
 	//检查有没有相同的MAC
 	struct lease_t *lease = lease_head; //保留头指针不动
 	while (lease->next) {
 		if (memcmp(lease->next->chaddr, mac, HARDWARE_ADDRESS_LENGTH) == 0) { //MAC相同
+			printf("---------------------------------\n");
 			lease->next->time_stamp = time(NULL); //更新时间戳
-			return lease->next->addr; //直接返回相同MAC地址对应的IP地址就可以了
+			*new_ip = lease->next->addr; //直接返回相同MAC地址对应的IP地址就可以了
+			return 0;
 		}
+		printf("+++++++++++++++++++++++++++++++++++++\n");
 		lease = lease->next;
 	}
 
 	if (num_of_lease > IP_ADDRESS_POOL_AMOUNT - 1) {
-		return 0; //地址池已经分配完了
+		return -1; //地址池已经分配完了
 	}
 
 	//没有相同的MAC
 	srand((unsigned int) time(NULL)); //随机数播种
-	uint32_t new_ip;
 
 	//判断随机生成的IP有没有重复的
 	outer:
 	num = rand() % IP_ADDRESS_POOL_AMOUNT;
-	new_ip = IP_ADDRESS_POOL_START + num; //随机生成一个IP地址
+	*new_ip = IP_ADDRESS_POOL_START + num; //随机生成一个IP地址
 	lease = lease_head; //保留头指针不动
 	while (lease->next) {
-		if (lease->next->addr == new_ip)
+		if (lease->next->addr == *new_ip)
 			goto outer;
 		lease = lease->next;
 	}
 
-	return new_ip;
+	return 0;
 }
 
 //记录租约
 void add_lease(uint32_t *new_ip, uint8_t *mac) {
 	struct lease_t *new_lease = (struct lease_t *) malloc(sizeof(struct lease_t));
 	new_lease->time_stamp = time(NULL); //时间戳
-	new_lease->addr = *new_ip;
+	new_lease->addr = ntohl(*new_ip);
 	memcpy(new_lease->chaddr, mac, HARDWARE_ADDRESS_LENGTH);
 	new_lease->next = NULL;
 
@@ -456,15 +454,17 @@ void add_lease(uint32_t *new_ip, uint8_t *mac) {
 }
 
 //删除租约链表中的节点
-void delete_lease(uint8_t *mac) {
+void delete_lease(uint32_t *ip, uint8_t *mac) {
 	struct lease_t *lease = lease_head; //保留头指针不动
 	while (lease->next) {
-		if (memcmp(lease->next->chaddr, mac, HARDWARE_ADDRESS_LENGTH) == 0) { //MAC相同
-			struct lease_t *temp = lease->next;
-			lease->next = lease->next->next;
-			free(temp);
-			num_of_lease--;
-			return;
+		if (lease->next->addr == *ip) { //IP相同
+			if (memcmp(lease->next->chaddr, mac, HARDWARE_ADDRESS_LENGTH) == 0) { //MAC相同
+				struct lease_t *temp = lease->next;
+				lease->next = lease->next->next;
+				free(temp);
+				num_of_lease--;
+				return;
+			}
 		}
 		lease = lease->next;
 	}
