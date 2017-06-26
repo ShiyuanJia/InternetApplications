@@ -1,12 +1,12 @@
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <arpa/inet.h>
-#include <linux/if.h>
+#include <net/if.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "dhcp-project.h"
 
@@ -78,6 +78,7 @@ void main(int argc, char **argv) {
 #pragma clang diagnostic ignored "-Wmissing-noreturn"
 	while (1) {
 		//接收dhcp包 Discover/Request/Decline/Release/Inform
+		printf("---------------------------------\n");
 		printf("Waiting for the dhcp packet...\n");
 		socklen_t receiveAddrLen = sizeof(struct sockaddr_in);
 		change_socket_setup(INADDR_ANY, INADDR_BROADCAST); //0.0.0.0 -> 255.255.255.255
@@ -215,12 +216,18 @@ uint16_t construct_dhcp_packet(struct dhcp_t *dhcp, uint8_t state) {
 	if (state == DHCPNAK) {
 		dhcp->yiaddr = htonl(INADDR_ANY); //NAK的时候返回0.0.0.0
 	} else if (state == DHCPOFFER) {
-		uint32_t offer_ip;
-		if (allocate_ip(&offer_ip, dhcp->chaddr) < 0) { //从地址池中找一个可用的地址
-			printf("IP address pool is not available!\n");
-			return 0;
+		uint8_t *option_value;
+		if (get_dhcp_option(&dhcp_recv, OPTION_REQUESTED_IP, &option_value) == 4 &&
+		    check_ipaddr((uint32_t *) option_value, dhcp_recv.chaddr) > 0) { //获取客户端要申请的地址 //判断申请的地址是否合法 //尽量满足客户端的要求
+			memcpy(&dhcp->yiaddr, option_value, sizeof(uint32_t));
+		} else {
+			uint32_t offer_ip;
+			if (allocate_ip(&offer_ip, dhcp->chaddr) < 0) { //从地址池中找一个可用的地址
+				printf("IP address pool is not available!\n");
+				return 0;
+			}
+			dhcp->yiaddr = htonl(offer_ip);
 		}
-		dhcp->yiaddr = htonl(offer_ip);
 	} else if (state == DHCPACK && dhcp->ciaddr == htonl(INADDR_ANY)) {
 		uint8_t *option_value;
 		get_dhcp_option(&dhcp_recv, OPTION_REQUESTED_IP, &option_value); //使用客户端请求的地址作为yiaddr
@@ -318,8 +325,18 @@ void change_socket_setup(uint32_t server_addr, uint32_t client_addr) {
 void dhcp_handle_discover() {
 	struct dhcp_t *dhcp_offer = &dhcp_recv;
 
+	//Default 0.0.0.0 -> 255.255.255.255
+	change_socket_setup(INADDR_ANY, INADDR_BROADCAST);
+
 	//发offer包
+	uint8_t *option_value;
+	if (dhcp_recv.flags == htonl(BOOTP_FLAGS_UNICAST)) {
+		if (get_dhcp_option(&dhcp_recv, OPTION_REQUESTED_IP, &option_value) == 4) //获取客户端要申请的地址
+			if (check_ipaddr((uint32_t *) option_value, dhcp_recv.chaddr) > 0) //判断申请的地址是否合法
+				change_socket_setup(DHCP_SERVER_IP_ADDRESS, ntohl(dhcp_recv.ciaddr)); //server_ip_address -> x.x.x.x
+	}
 	size_t dhcp_offer_size = construct_dhcp_packet(dhcp_offer, DHCPOFFER);
+
 	printf("Sending the dhcp offer packet...\n");
 	if (sendto(dhcp_socket, dhcp_offer, dhcp_offer_size, 0, (struct sockaddr *) &dhcp_client_addr,
 	           sizeof(struct sockaddr_in)) < 0)
@@ -332,17 +349,31 @@ void dhcp_handle_request() {
 
 	//发ack包 或 nak包
 	size_t dhcp_nack_size;
-	uint8_t *option_value; //判断包的Client IP address
+	uint8_t *option_value;
+	if (get_dhcp_option(&dhcp_recv, OPTION_DHCP_SERVER_IDENTIFIER, &option_value) != 4) //获取客户端选择的服务器地址
+		return;
+	uint32_t selected_server;
+	memcpy(&selected_server, option_value, 4);
+	if (DHCP_SERVER_IP_ADDRESS != ntohl(selected_server)) //客户端选择的服务器地址是否是本机
+		return;
 	if (dhcp_recv.ciaddr == htonl(INADDR_ANY)) { //空地址 -> discover过程的request -> 即要在option 50申请地址
+		change_socket_setup(INADDR_ANY, INADDR_BROADCAST); //0.0.0.0 -> 255.255.255.255
+		if (dhcp_recv.flags == htonl(BOOTP_FLAGS_UNICAST)) {
+			if (get_dhcp_option(&dhcp_recv, OPTION_REQUESTED_IP, &option_value) == 4) //获取客户端要申请的地址
+				if (check_ipaddr((uint32_t *) option_value, dhcp_recv.chaddr) > 0) //判断申请的地址是否合法
+					change_socket_setup(DHCP_SERVER_IP_ADDRESS, ntohl(dhcp_recv.ciaddr)); //server_ip_address -> x.x.x.x
+		}
 		get_dhcp_option(&dhcp_recv, OPTION_REQUESTED_IP, &option_value); //获取客户端要申请的地址
 		if (check_ipaddr((uint32_t *) option_value, dhcp_recv.chaddr) > 0) //判断申请的地址是否合法
 			dhcp_nack_size = construct_dhcp_packet(dhcp_nack, DHCPACK); //合法，返回ack包
 		else
 			dhcp_nack_size = construct_dhcp_packet(dhcp_nack, DHCPNAK); //不合法，返回nak包
-		change_socket_setup(INADDR_ANY, INADDR_BROADCAST); //0.0.0.0 -> 255.255.255.255
-	} else {
-		dhcp_nack_size = construct_dhcp_packet(dhcp_nack, DHCPACK); //有地址 -> 普通request
+	} else { //有地址 -> 普通request
 		change_socket_setup(DHCP_SERVER_IP_ADDRESS, ntohl(dhcp_recv.ciaddr)); //server_ip_address -> x.x.x.x
+		if (check_ipaddr(&dhcp_recv.ciaddr, dhcp_recv.chaddr) > 0) //判断申请的地址是否合法
+			dhcp_nack_size = construct_dhcp_packet(dhcp_nack, DHCPACK); //合法，返回ack包
+		else
+			dhcp_nack_size = construct_dhcp_packet(dhcp_nack, DHCPNAK); //不合法，返回nak包
 	}
 
 	printf("Sending the dhcp ack/nak packet...\n");
@@ -353,6 +384,14 @@ void dhcp_handle_request() {
 
 //处理客户端的release
 void dhcp_handle_release() {
+	uint8_t *option_value; //判断包的Client IP address
+	if (get_dhcp_option(&dhcp_recv, OPTION_DHCP_SERVER_IDENTIFIER, &option_value) != 4) //获取客户端选择的服务器地址
+		return;
+	uint32_t selected_server;
+	memcpy(&selected_server, option_value, 4);
+	if (DHCP_SERVER_IP_ADDRESS != ntohl(selected_server)) //客户端选择的服务器地址是否是本机
+		return;
+
 	//不需要回复，只需要把租约链表中对应的节点删除就可以了
 	printf("Deleting lease...\n");
 	delete_lease(&dhcp_recv.ciaddr, dhcp_recv.chaddr);
@@ -383,7 +422,7 @@ int check_ipaddr(uint32_t *ip, uint8_t *mac) {
 	//检查现有租约中有没有重复的地址
 	struct lease_t *lease = lease_head; //保留头指针不动
 	while (lease->next) {
-		if (lease->next->addr == *ip) { //IP相同
+		if (lease->next->addr == req_ip) { //IP相同
 			time_t now = time(NULL);
 			if (lease->next->time_stamp + IP_ADDRESS_LEASE_TIME > now) { //租约没有到期
 				if (memcmp(lease->next->chaddr, mac, HARDWARE_ADDRESS_LENGTH) != 0) { //记录的MAC地址不相同 //相同的时候memcmp返回0
@@ -407,12 +446,10 @@ int allocate_ip(uint32_t *new_ip, uint8_t *mac) {
 	struct lease_t *lease = lease_head; //保留头指针不动
 	while (lease->next) {
 		if (memcmp(lease->next->chaddr, mac, HARDWARE_ADDRESS_LENGTH) == 0) { //MAC相同
-			printf("---------------------------------\n");
 			lease->next->time_stamp = time(NULL); //更新时间戳
 			*new_ip = lease->next->addr; //直接返回相同MAC地址对应的IP地址就可以了
 			return 0;
 		}
-		printf("+++++++++++++++++++++++++++++++++++++\n");
 		lease = lease->next;
 	}
 
@@ -439,33 +476,63 @@ int allocate_ip(uint32_t *new_ip, uint8_t *mac) {
 
 //记录租约
 void add_lease(uint32_t *new_ip, uint8_t *mac) {
+	//检查有没有相同的MAC
+	struct lease_t *lease = lease_head; //保留头指针不动
+	while (lease->next) {
+		if (lease->next->addr == ntohl(*new_ip)) { //IP相同
+			lease->next->time_stamp = time(NULL);
+			return;
+		}
+		lease = lease->next;
+	}
+
 	struct lease_t *new_lease = (struct lease_t *) malloc(sizeof(struct lease_t));
 	new_lease->time_stamp = time(NULL); //时间戳
 	new_lease->addr = ntohl(*new_ip);
 	memcpy(new_lease->chaddr, mac, HARDWARE_ADDRESS_LENGTH);
 	new_lease->next = NULL;
 
-	struct lease_t *lease = lease_head; //保留头指针不动
+	lease = lease_head; //保留头指针不动
 	while (lease->next)
 		lease = lease->next;
 
 	lease->next = new_lease;
 	num_of_lease++;
+	printf("Number of lease: %d\n", num_of_lease);
+
+	struct lease_t *debug_lease = lease_head; //保留头指针不动
+	while (debug_lease->next) {
+		printf("lease---------->%x--------->%02x:%02x:%02x:%02x:%02x:%02x\n", debug_lease->next->addr,
+		       debug_lease->next->chaddr[0], debug_lease->next->chaddr[1], debug_lease->next->chaddr[2],
+		       debug_lease->next->chaddr[3], debug_lease->next->chaddr[4], debug_lease->next->chaddr[5]);
+		debug_lease = debug_lease->next;
+	}
 }
 
 //删除租约链表中的节点
 void delete_lease(uint32_t *ip, uint8_t *mac) {
 	struct lease_t *lease = lease_head; //保留头指针不动
 	while (lease->next) {
-		if (lease->next->addr == *ip) { //IP相同
+		if (lease->next->addr == ntohl(*ip)) { //IP相同
 			if (memcmp(lease->next->chaddr, mac, HARDWARE_ADDRESS_LENGTH) == 0) { //MAC相同
 				struct lease_t *temp = lease->next;
 				lease->next = lease->next->next;
 				free(temp);
 				num_of_lease--;
+				printf("Number of lease: %d\n", num_of_lease);
 				return;
 			}
 		}
 		lease = lease->next;
 	}
+
+	struct lease_t *debug_lease = lease_head; //保留头指针不动
+	while (debug_lease->next) {
+		printf("lease---------->%x--------->%02x:%02x:%02x:%02x:%02x:%02x\n", debug_lease->next->addr,
+		       debug_lease->next->chaddr[0], debug_lease->next->chaddr[1], debug_lease->next->chaddr[2],
+		       debug_lease->next->chaddr[3], debug_lease->next->chaddr[4], debug_lease->next->chaddr[5]);
+		debug_lease = debug_lease->next;
+	}
 }
+
+
