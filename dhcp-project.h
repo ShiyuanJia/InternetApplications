@@ -20,7 +20,9 @@
 #define SECONDS_ELAPSED                       0
 
 //0x0000 -> Unicast  0x8000 -> Broadcast
-#define BOOTP_FLAGS                           0x8000
+#define BOOTP_FLAGS_UNICAST                   0x0000
+#define BOOTP_FLAGS_BROADCAST                 0x8000
+#define BOOTP_FLAGS                           BOOTP_FLAGS_BROADCAST
 
 #define DHCP_MAGIC_COOKIE                     0x63825363
 
@@ -63,7 +65,7 @@
 //-----> DHCP Server Arguments
 #define IP_ADDRESS_POOL_START                 0xC0A80002 //192.168.0.2
 #define IP_ADDRESS_POOL_AMOUNT                100
-#define IP_ADDRESS_LEASE_TIME                 64 //单位为秒 //最好是8的倍数
+#define IP_ADDRESS_LEASE_TIME                 32 //单位为秒 //最好是8的倍数
 
 #define DHCP_SERVER_IP_ADDRESS                0xC0A80001 //192.168.0.1
 
@@ -103,8 +105,8 @@ struct lease_t {
 };
 
 uint8_t parameter_req_list[] = {OPTION_SUBNET_MASK, OPTION_ROUTER, OPTION_DOMAIN_NAME_SERVER,
-                                 OPTION_IP_ADDRESS_LEASE_TIME, OPTION_IP_T1_RENEWAL_TIME, OPTION_IP_T2_REBIND_TIME,
-                                 OPTION_VENDOR_CLASS_IDENTIFIER};
+                                OPTION_IP_ADDRESS_LEASE_TIME, OPTION_IP_T1_RENEWAL_TIME, OPTION_IP_T2_REBIND_TIME,
+                                OPTION_VENDOR_CLASS_IDENTIFIER};
 
 uint8_t get_dhcp_option(struct dhcp_t *dhcp, uint8_t option_type, uint8_t **option_value) {
 	uint8_t *i;
