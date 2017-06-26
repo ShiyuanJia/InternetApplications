@@ -1,9 +1,9 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
-#include <sys/time.h>
+#include <time.h>
 #include <arpa/inet.h>
-#include <linux/if.h>
+#include <net/if.h>
 #include <net/route.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -12,6 +12,8 @@
 #include <signal.h>
 
 #include "dhcp-project.h"
+
+void usage(char **argv);
 
 void interact();
 
@@ -39,7 +41,7 @@ int dhcp_inform(struct dhcp_t *dhcp_ack);
 
 int dhcp_renew(struct dhcp_t *dhcp_ack);
 
-void dhcp_rebind(struct dhcp_t *dhcp_ack);
+int dhcp_rebind(struct dhcp_t *dhcp_ack);
 
 int get_mac_address(uint8_t *mac);
 
@@ -83,18 +85,15 @@ uint32_t dhcp_server_identifier; //未转换的 网络字节序的
 socklen_t receiveAddrLen = sizeof(struct sockaddr_in);
 
 int main(int argc, char **argv) {
-	//参数数目不对或者是"-h"的时候
-	if (argc != 3 || !strcmp(argv[1], "-h")) {
-		printf("Usage: %s <interface> <option>\n"
-				       "Options:\n"
-				       "--interact   interact\n"
-				       "--default    default\n", argv[0]);
-		exit(0);
-	}
-
 	//应该以root权限运行
 	if (geteuid() != 0) {
 		printf("This program should only be ran by root or be installed as setuid root.\n");
+		exit(0);
+	}
+
+	//参数数目不对时
+	if (argc < 3 || argc > 4) {
+		usage(argv);
 		exit(0);
 	}
 
@@ -104,17 +103,43 @@ int main(int argc, char **argv) {
 	//初始化socket和地址结构体
 	dhcp_setup();
 
-	//各种模式
-	if (!strcmp(argv[2], "--interact")) {
-		interact();
-	} else if (!strcmp(argv[2], "--default")) {
-		discover();
-	} else {
-		printf("Wrong option! Use \"-h\" to get usage!\n");
+	if(argc == 3) { //三个参数时
+		if (!strcmp(argv[2], "--interact")) {
+			interact();
+		} else if (!strcmp(argv[2], "--default")) {
+			discover();
+		} else {
+			usage(argv);
+		}
+	} else if (argc == 4) { //四个参数时
+		//第四个参数即为指定的服务器地址
+		dhcp_server_identifier = inet_addr(argv[3]);
+		if (!strcmp(argv[2], "--release")) {
+			release();
+		} else if (!strcmp(argv[2], "--inform")) {
+			inform();
+		} else if (!strcmp(argv[2], "--renew")) {
+			renew();
+		} else if (!strcmp(argv[2], "--rebind")) {
+			rebind();
+		} else {
+			usage(argv);
+		}
 	}
 
 	dhcp_close();
 	return 0;
+}
+
+void usage(char **argv) {
+	printf("Usage: %s <interface> <option>\n"
+			       "Options:\n"
+			       "--interact\n"
+			       "--default\n"
+			       "--release <Server IP>\n"
+			       "--inform <Server IP>\n"
+			       "--renew <Server IP>\n"
+			       "--rebind <Server IP>\n", argv[0]);
 }
 
 //交互菜单
@@ -173,6 +198,7 @@ void discover() {
 		return;
 	}
 	setup_interface(&dhcp_ack);
+	set_alarm(&dhcp_ack); //更新T1 T2计时器
 }
 
 void release() {
@@ -215,7 +241,17 @@ void renew() {
 void rebind() {
 	printf("-----> Rebind Mode\n"); //广播
 	struct dhcp_t dhcp_ack;
-	dhcp_rebind(&dhcp_ack);
+	int state = dhcp_rebind(&dhcp_ack);
+	if (state < 0) {
+		printf("Cannot receive dhcp packet, please try again later...\n");
+		return;
+	} else if (state > 0) {
+		printf("Received a dhcp nak packet!\n");
+		setup_interface_release();
+		printf("Automatically set IP to 0.0.0.0.\n");
+		discover();
+		return;
+	}
 	set_alarm(&dhcp_ack); //更新T1 T2计时器
 }
 
@@ -279,6 +315,9 @@ void dhcp_setup() {
 		dhcp_close();
 		exit(1);
 	}
+
+	//设置信号处理函数
+	signal(SIGALRM, (__sighandler_t) lease_time_out);
 }
 
 //修改两个sockaddr的地址
@@ -463,7 +502,7 @@ int dhcp_renew(struct dhcp_t *dhcp_ack) {
 }
 
 //rebind过程
-void dhcp_rebind(struct dhcp_t *dhcp_ack) {
+int dhcp_rebind(struct dhcp_t *dhcp_ack) {
 	struct dhcp_t dhcp_rebind;
 	uint8_t *option_value;
 	srand((unsigned int) time(NULL)); //随机数播种
@@ -481,10 +520,16 @@ void dhcp_rebind(struct dhcp_t *dhcp_ack) {
 	//接收dhcp ack包
 	while (1) {
 		printf("Receiving the dhcp ack packet...\n");
-		recvfrom(dhcp_socket, dhcp_ack, sizeof(struct dhcp_t), 0, (struct sockaddr *) &receiveAddr,
-		         &receiveAddrLen);
+		if (recvfrom(dhcp_socket, dhcp_ack, sizeof(struct dhcp_t), 0, (struct sockaddr *) &receiveAddr,
+		             &receiveAddrLen) < 0) {
+			return -1;
+		}
 		printf("Received an udp packet! Checking...\n");
 		if (dhcp_ack->opcode == BOOTP_MESSAGE_TYPE_REPLY && dhcp_ack->xid == htonl(xid)) {
+			get_dhcp_option(dhcp_ack, OPTION_DHCP_MESSAGE_TYPE, &option_value);
+			if (*option_value == DHCPNAK) {
+				return 1;
+			}
 			get_dhcp_option(dhcp_ack, OPTION_DHCP_SERVER_IDENTIFIER, &option_value);
 			memcpy(&dhcp_server_identifier, option_value, sizeof(struct in_addr));
 			int addr = ntohl(dhcp_server_identifier);
@@ -493,6 +538,8 @@ void dhcp_rebind(struct dhcp_t *dhcp_ack) {
 			break;
 		}
 	}
+
+	return 0;
 }
 
 //获取mac地址
@@ -543,7 +590,7 @@ uint16_t construct_dhcp_packet(struct dhcp_t *dhcp, uint8_t state) {
 
 	//Bootp flags
 	if (state == DHCPRELEASE || state == DHCPDECLINE)
-		dhcp->flags = htons(0x0000);
+		dhcp->flags = htons(BOOTP_FLAGS_UNICAST);
 	else
 		dhcp->flags = htons(BOOTP_FLAGS);
 
@@ -657,9 +704,6 @@ void setup_interface(struct dhcp_t *dhcp_ack) {
 		return;
 	}
 
-	//设置定时
-	set_alarm(dhcp_ack);
-
 	return;
 }
 
@@ -713,7 +757,6 @@ void set_alarm(struct dhcp_t *dhcp_ack) {
 
 	printf("IP lease time: %us T1: %us T2: %us\n", lease_time, t1_time, t2_time);
 
-	signal(SIGALRM, lease_time_out);
 	alarm(t1_time);
 }
 
